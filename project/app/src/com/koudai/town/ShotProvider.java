@@ -1,4 +1,4 @@
-package com.koudai.cpm;
+package com.koudai.town;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;
@@ -18,7 +18,7 @@ import java.io.FileNotFoundException;
  */
 public class ShotProvider extends ContentProvider {
 
-    public static final String AUTHORITY = "com.koudai.cpm.shots";
+    public static final String AUTHORITY = "com.koudai.town.shots";
 
     public static Uri uriFor(File f) {
         return Uri.parse("content://" + AUTHORITY + "/" + f.getName());

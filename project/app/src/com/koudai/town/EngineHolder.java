@@ -1,4 +1,4 @@
-package com.koudai.cpm;
+package com.koudai.town;
 
 /**
  * llama-server 子进程的进程内单例。

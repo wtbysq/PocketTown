@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.koudai.cpm"
-    android:versionCode="43"
-    android:versionName="1.1.0">
+    package="com.koudai.town"
+    android:versionCode="44"
+    android:versionName="1.2.0">
 
     <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="34" />
 
@@ -11,7 +11,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- 仅 Android 9 及以下写 Download/口袋CPM 需要；10 以上走 MediaStore 不需要权限 -->
+    <!-- 仅 Android 9 及以下写 Download/口袋小镇 需要；10 以上走 MediaStore 不需要权限 -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
@@ -29,7 +29,7 @@
     </queries>
 
     <application
-        android:label="口袋CPM"
+        android:label="口袋小镇"
         android:icon="@drawable/ic_launcher"
         android:extractNativeLibs="true"
         android:hardwareAccelerated="true"
@@ -61,7 +61,7 @@
         <!-- 拍照输出用的极简 content provider -->
         <provider
             android:name=".ShotProvider"
-            android:authorities="com.koudai.cpm.shots"
+            android:authorities="com.koudai.town.shots"
             android:exported="false"
             android:grantUriPermissions="true" />
     </application>

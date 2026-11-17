@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""把 aapt2 产出的资源包 + dex + assets（含内置模型分片）+ 原生库 组装成未对齐的 APK。
+"""把 aapt2 产出的资源包 + dex + assets（网页 / 语音 / 音色）+ 原生库 组装成未对齐的 APK。
 
-大模型按 PART_SIZE 分片写入 assets/models/<name>.000 .001 ...，
-App 首次启动按编号顺序拼接还原，避开单 asset 超过 1GB 的读取问题。
+默认只带语音（ASR + 6 个音色），大模型走单独的模型包导入；BUNDLE_MODELS=1 时才把
+1B 文本模型 + 视觉投影器分片塞进 assets/models/（品牌整合包用）。
+分片是为了避开单 asset 超过 1GB 的读取问题，App 首次启动按编号拼接还原。
 """
 import os
 import struct
@@ -19,7 +20,9 @@ LIBS_EXTRA = os.path.join(ROOT, "speech", "libs")   # sherpa-onnx / onnxruntime
 MODELS = "D:/口袋CPM/testbed/models"
 OUT = os.path.join(ROOT, "build", "unaligned.apk")
 
-# 内置语音模型：(磁盘文件, APK 内路径)
+# 内置语音模型：(磁盘文件, APK 内路径)。
+# 识别 1 套 + 朗读 6 个音色（female/male/bronya/theresa/zzl/doom），全部随包，
+# App 里按需解出——只有实际用到的音色才写盘，见 MainActivity.prepareVoice。
 SPEECH_FILES = [
     ("D:/kcpm/speech/asr/model.int8.onnx", "speech/asr/model.int8.onnx"),
     ("D:/kcpm/speech/asr/tokens.txt", "speech/asr/tokens.txt"),
@@ -42,6 +45,13 @@ SPEECH_FILES = [
     ("D:/kcpm/speech/tts-m/new_heteronym.fst", "speech/tts_m/new_heteronym.fst"),
 ]
 
+# 另外 4 个音色：speech/voices/tts_<key>/ 下已经是 model.onnx 这种标准命名
+for _v in ("bronya", "theresa", "zzl", "doom"):
+    _src = "D:/kcpm/speech/voices/tts_" + _v
+    for _n in ("model.onnx", "tokens.txt", "lexicon.txt",
+               "date.fst", "number.fst", "phone.fst", "new_heteronym.fst"):
+        SPEECH_FILES.append((os.path.join(_src, _n), "speech/tts_%s/%s" % (_v, _n)))
+
 # 内置进 APK 的模型：文本主模型 + 视觉投影器（全量版）
 BUNDLED_MODELS = [
     "MiniCPM-V-4_7-1B-Q4_K_M.gguf",
@@ -51,8 +61,9 @@ BUNDLED_MODELS = [
 SKIP = {"libllama-cli-impl.so", "llama-cli"}
 CHUNK = 4 * 1024 * 1024
 PART_SIZE = 400 * 1024 * 1024  # 每片 400MB，远低于单 asset 1GB 的隐患线
-# BUNDLE_MODELS=0 出轻量包（不含模型，改为在设置里导入模型 zip）
-BUNDLE_MODELS = os.environ.get("BUNDLE_MODELS", "1") != "0"
+# 默认不带大模型（走模型包导入）；BUNDLE_MODELS=1 出把 1B 也塞进去的整合包。
+# 语音（ASR + 6 个音色）永远打包，不随这个开关走。
+BUNDLE_MODELS = os.environ.get("BUNDLE_MODELS", "0") != "0"
 
 
 def add(zf, arcname, path):
@@ -169,7 +180,7 @@ def main():
                     if os.path.isfile(p):
                         add(zf, "assets/%s/%s" % (sub, name), p)
 
-        # 4) 内置模型（分片；视觉投影器 deflate，其余 STORED）
+        # 4) 内置大模型（可选；只有 BUNDLE_MODELS=1 的整合包才塞）
         if BUNDLE_MODELS:
             for name in BUNDLED_MODELS:
                 p = os.path.join(MODELS, name)
@@ -187,25 +198,25 @@ def main():
                         add_deflated(zf, arc, p, off, length)
                     else:
                         add_stored(zf, arc, p, off, length)
-
-            # 4b) 内置语音模型
-            for src, arcbase in SPEECH_FILES:
-                if not os.path.exists(src):
-                    sys.exit("找不到语音模型：%s" % src)
-                size = os.path.getsize(src)
-                parts = max(1, (size + PART_SIZE - 1) // PART_SIZE)
-                print("   打包语音 %s (%.1f MB)" % (os.path.basename(src), size / 1048576.0))
-                squeeze = arcbase.endswith(".onnx")
-                for i in range(parts):
-                    off = i * PART_SIZE
-                    name = "assets/%s.%03d" % (arcbase, i)
-                    length = min(PART_SIZE, size - off)
-                    if squeeze:
-                        add_deflated(zf, name, src, off, length)
-                    else:
-                        add_stored(zf, name, src, off, length)
         else:
-            print("   （轻量包：模型不打包，由模型 zip 导入）")
+            print("   （不带大模型：1B / 2B / 4B 统一由模型包导入）")
+
+        # 4b) 内置语音（识别 + 6 个音色）：与上面的开关无关，永远进包
+        for src, arcbase in SPEECH_FILES:
+            if not os.path.exists(src):
+                sys.exit("找不到语音模型：%s" % src)
+            size = os.path.getsize(src)
+            parts = max(1, (size + PART_SIZE - 1) // PART_SIZE)
+            print("   打包语音 %s (%.1f MB)" % (os.path.basename(src), size / 1048576.0))
+            squeeze = arcbase.endswith(".onnx")
+            for i in range(parts):
+                off = i * PART_SIZE
+                name = "assets/%s.%03d" % (arcbase, i)
+                length = min(PART_SIZE, size - off)
+                if squeeze:
+                    add_deflated(zf, name, src, off, length)
+                else:
+                    add_stored(zf, name, src, off, length)
 
         # 5) 原生库（装包后由系统解压到 nativeLibraryDir，可执行）
         for libdir in (LIBS, LIBS_EXTRA):

@@ -1,4 +1,4 @@
-package com.koudai.cpm;
+package com.koudai.town;
 
 import android.app.Activity;
 import android.app.ActivityManager;
@@ -18,6 +18,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.StatFs;
 import android.provider.MediaStore;
+import android.provider.OpenableColumns;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
@@ -59,7 +60,7 @@ import java.util.ArrayList;
 import java.util.Locale;
 
 /**
- * 口袋CPM 测试版外壳。
+ * 口袋小镇 测试版外壳。
  *
  * 模型随 APK 一起打包在 assets/models/ 下，首次启动释放到应用内部存储，
  * 之后直接复用（不会重复解包）。llama-server（arm64，打包为 jniLibs 里的
@@ -68,7 +69,7 @@ import java.util.Locale;
  */
 public class MainActivity extends Activity {
 
-    private static final String TAG = "KoudaiCPM";
+    private static final String TAG = "KoudaiTown";
     private static final int PORT = 8080;
 
     /** assets 里的模型（打包进去的） */
@@ -90,8 +91,8 @@ public class MainActivity extends Activity {
 
     /**
      * 音色表：key -> speech/ 下的目录名。
-     * 前两个随包内置（首次启动从 assets 解出），后四个来自「音色包」zip，
-     * 导入后自动出现在音色列表里，不需要重新打包 APK。
+     * 六个音色都随 APK 发布（assets/speech/tts*），用到哪个解哪个；
+     * 老版本留下的「音色包」zip 也还能导入，落到同名目录即可。
      */
     private static final String[][] VOICES = {
             {"female", "tts"},
@@ -115,8 +116,14 @@ public class MainActivity extends Activity {
     private volatile boolean serviceStarted = false;
     /** 引擎是否已经就绪（退出时据此决定要不要保活）。 */
     private volatile boolean engineReady = false;
+    /** 后台正在预解内置 1B，避免重复起线程。 */
+    private volatile boolean prefetching1b = false;
 
     private volatile int engineCtx = 8192;
+    /** Qwen3-VL 需要 --jinja（思考开关在它自带的聊天模板里）。 */
+    private boolean engineJinja = false;
+    /** 已经因为启动失败退回一次 1B，避免无限递归。 */
+    private boolean fellBack1b = false;
     /** 是否给 KV cache 开 q8 量化（同等内存下装两倍上下文）。 */
     private volatile boolean engineQuantKv = true;
     private volatile int engineThreads = 4;
@@ -128,6 +135,16 @@ public class MainActivity extends Activity {
     /** 选中的存档内容（JS 也分片取）。 */
     private String archivePickText = null;
 
+    /**
+     * 选中的文档（.docx）正文。
+     * 和存档一样分片给 JS：一份 40 万字的文档一次性跨 WebView 桥会明显卡顿。
+     */
+    private volatile String docText = "";
+    private volatile String docName = "";
+    private volatile int docParas = 0;
+    private volatile boolean docTruncated = false;
+    private volatile boolean docParsing = false;
+
     /** WebView 里 <input type=file> 的回调 */
     private ValueCallback<Uri[]> filePathCallback;
     private Uri cameraUri;
@@ -136,6 +153,7 @@ public class MainActivity extends Activity {
     private static final int REQ_MIC = 9003;
     private static final int REQ_ZIP = 9005;
     private static final int REQ_ARCHIVE = 9006;
+    private static final int REQ_DOC = 9007;
     private volatile boolean pendingAsr = false;
     private volatile boolean recording = false;
     private volatile boolean importing = false;
@@ -192,16 +210,24 @@ public class MainActivity extends Activity {
             throw new IOException("无法创建模型目录：" + dir);
         }
 
-        // 选模型档案：1b（默认）/ 35b。选中的不存在就退回另一个，都没有再引导导入。
+        // 选模型档案：1b（默认）/ 2b / 4b / 35b。
+        // 本机跑不动时退回 1B；选中档文件不在时，按 1b → 2b → 4b → 35b 找第一个可用的
+        // （1B 例外：它缺文件说明内置副本还没解出来，见下面）。
         String want = modelPref();
-        if (ID_35B.equals(want) && !canRun35b()) {
-            Log.w(TAG, "当前机型内存不够跑 35B，回退 1B");
+        if (!canRun(want)) {
+            Log.w(TAG, "当前机型跑不动 " + want + "，回退 1B");
             want = ID_1B;
         }
         String id = want;
-        if (!ready(new File(modelDir(want), modelFile(want)))) {
-            String other = "35b".equals(want) ? "1b" : "35b";
-            id = ready(new File(modelDir(other), modelFile(other))) ? other : want;
+        // 1B 缺文件不是"没导入"，而是内置副本还没解出来——留着 id 走下面的解包，
+        // 否则会悄悄降级去用别的档，用户点了切回 1B 却还在跑 4B。
+        if (!modelExists(want) && !ID_1B.equals(want)) {
+            for (String c : new String[]{ID_1B, ID_2B, ID_4B, ID_35B}) {
+                if (!c.equals(want) && canRun(c) && modelExists(c)) {
+                    id = c;
+                    break;
+                }
+            }
         }
         final File mdir = modelDir(id);
         if (!mdir.exists() && !mdir.mkdirs()) {
@@ -221,6 +247,7 @@ public class MainActivity extends Activity {
             engineReady = true;
             ensureSpeech();
             startKeepAlive();
+            prefetch1b();
             ui.post(new Runnable() {
                 @Override
                 public void run() {
@@ -234,8 +261,9 @@ public class MainActivity extends Activity {
             EngineHolder.stop();
         }
 
-        // 1) 主模型（必需；只有 1B 有内置副本，35B 必须导入）
-        if (!ready(model) && "1b".equals(id)) {
+        // 1) 主模型（必需）。只有整合包（BUNDLE_MODELS=1）才在 assets 里带 1B 副本，
+        //    普通包三档都靠「模型包」导入，这里先看 assets 到底有没有。
+        if (!ready(model) && "1b".equals(id) && hasAsset(ASSET_MODEL + ".000")) {
             setStatusAsync("首次启动，正在解出文本模型…\n（约 641MB）");
             if (!extractParts(ASSET_MODEL, model, "文本模型")) {
                 showSetup(dir, model, mmproj);
@@ -256,14 +284,18 @@ public class MainActivity extends Activity {
         // 3) 语音模型：识别 + 男女两套音色（已在本进程初始化过就跳过）
         ensureSpeech();
 
-        boolean big = "35b".equals(id);
-        // 1B：8192 上下文 + q8 量化的 KV cache，内存占用和原来 4096 差不多
-        engineCtx = big ? 2048 : 8192;
-        engineQuantKv = !big;
-        engineThreads = big ? 6 : 4;
+        boolean big = ID_35B.equals(id);
+        engineJinja = isQwen(id);
+        // 1B / 2B：8192 上下文 + q8 量化 KV，内存和 4096 差不多；
+        // 4B 权重本身就大，退回 4096 + f16 KV，先把内存留住；35B 只用 2048。
+        engineCtx = big ? 2048 : (ID_4B.equals(id) ? 4096 : 8192);
+        engineQuantKv = !big && !ID_4B.equals(id);
+        engineThreads = (big || ID_4B.equals(id)) ? 6 : 4;
         setStatusAsync(big
                 ? "正在加载 35B 模型…\n（首次要几十秒到几分钟，内存吃紧时会慢）"
-                : "正在启动本地引擎…\n（视觉加速：GPU）");
+                : (engineJinja
+                ? "正在加载 Qwen3-VL…\n（首次要十几秒，视觉编码走 GPU）"
+                : "正在启动本地引擎…\n（视觉加速：GPU）"));
         boolean ok = tryStart(model, hasMmproj ? mmproj : null, !big, big ? 300_000 : 75_000);
 
         if (!ok && !big && engineCtx > 4096) {
@@ -286,12 +318,25 @@ public class MainActivity extends Activity {
             getSharedPreferences("koudai", MODE_PRIVATE).edit()
                     .putString("model", id).apply();
             startKeepAlive();
+            prefetch1b();
             ui.post(new Runnable() {
                 @Override
                 public void run() {
                     showWeb();
                 }
             });
+        } else if (!ID_1B.equals(id) && !fellBack1b && modelExists(ID_1B)) {
+            // 切到 2B/4B/35B 后起不来（内存不足、权重损坏、模板不兼容…）：
+            // 先把偏好改回 1B 再重来一次，别让用户下次开机也进不去。
+            fellBack1b = true;
+            Log.w(TAG, id + " 启动失败，回退 1B 重试");
+            getSharedPreferences("koudai", MODE_PRIVATE).edit()
+                    .putString("model", ID_1B).apply();
+            EngineHolder.stop();
+            server = null;
+            engineReady = false;
+            boot();
+            return;
         } else {
             setStatusAsync("引擎启动失败。\n\n最近的引擎日志：\n" + serverTail());
         }
@@ -368,10 +413,14 @@ public class MainActivity extends Activity {
         }
         if (!has(asrTokens)) extractParts(ASSET_ASR_TOKENS, asrTokens, "识别词表");
 
-        File femaleDir = new File(sdir, "tts");
-        File maleDir = new File(sdir, "tts_m");
-        boolean femaleOk = prepareVoice(femaleDir, "speech/tts", "女声");
-        boolean maleOk = prepareVoice(maleDir, "speech/tts_m", "男声");
+        // 女声常驻（TTS 兜底），其它音色等真正切过去时再解（setVoice 里做）
+        File femaleDir = voiceDirOf("female");
+        prepareVoice(femaleDir, "speech/tts", "女声");
+        String wantVoice = voicePref();
+        File wantDir = voiceDirOf(wantVoice);
+        if (wantDir != null && !"female".equals(wantVoice) && !voiceReady(wantVoice)) {
+            prepareVoice(wantDir, "speech/" + voiceDirName(wantVoice), wantVoice);
+        }
 
         // 初始化语音引擎（失败只是没有语音，不影响对话）
         if (ready(asrModel) && has(asrTokens)) {
@@ -425,6 +474,26 @@ public class MainActivity extends Activity {
         return null;
     }
 
+    /** 音色 key -> speech/ 下的目录名（female -> tts、male -> tts_m …）。 */
+    private String voiceDirName(String key) {
+        if (key != null) {
+            for (String[] v : VOICES) {
+                if (v[0].equals(key)) return v[1];
+            }
+        }
+        return null;
+    }
+
+    /** assets 里有没有这个条目：模型可以选择不打进包，别对着空 assets 反复解包。 */
+    private boolean hasAsset(String name) {
+        try {
+            getAssets().open(name).close();
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     /** 这个音色的模型齐不齐（内置的没导入时靠 assets 补齐）。 */
     private boolean voiceReady(String key) {
         File dir = voiceDirOf(key);
@@ -461,27 +530,44 @@ public class MainActivity extends Activity {
         return getSharedPreferences("koudai", MODE_PRIVATE).getBoolean("warm", true);
     }
 
-    /* ---------- 模型档案：1b / 35b ---------- */
+    /* ---------- 模型档案：1b / 2b / 4b / 35b ---------- */
 
     private static final String ID_1B = "1b";
+    private static final String ID_2B = "2b";
+    private static final String ID_4B = "4b";
     private static final String ID_35B = "35b";
+
+    private static final String QWEN2B_MAIN = "Qwen3-VL-2B-Instruct-Q4_K_M.gguf";
+    private static final String QWEN4B_MAIN = "Qwen3-VL-4B-Instruct-Q4_K_M.gguf";
+    private static final String QWEN_MMPROJ = "mmproj-F16.gguf";
 
     private String modelPref() {
         return getSharedPreferences("koudai", MODE_PRIVATE).getString("model", ID_1B);
     }
 
+    /** Qwen3-VL 档要用它自带的聊天模板（思考开关写在模板里），必须带 --jinja。 */
+    private static boolean isQwen(String id) {
+        return ID_2B.equals(id) || ID_4B.equals(id);
+    }
+
     private File modelDir(String id) {
-        return new File(getFilesDir(), ID_35B.equals(id) ? "models35" : "models");
+        String d = ID_35B.equals(id) ? "models35"
+                : ID_4B.equals(id) ? "models4b"
+                : ID_2B.equals(id) ? "models2b" : "models";
+        return new File(getFilesDir(), d);
     }
 
     private String modelFile(String id) {
-        return ID_35B.equals(id)
-                ? "MiniCPM-V-4_7-35B-A3B-mix_q3gud_im.gguf"
-                : MODEL_NAME;
+        if (ID_35B.equals(id)) return "MiniCPM-V-4_7-35B-A3B-mix_q3gud_im.gguf";
+        if (ID_4B.equals(id)) return QWEN4B_MAIN;
+        if (ID_2B.equals(id)) return QWEN2B_MAIN;
+        return MODEL_NAME;
     }
 
     private String mmprojFile(String id) {
-        return ID_35B.equals(id) ? "mmproj-model-f16.gguf" : MMPROJ_NAME;
+        if (ID_35B.equals(id)) return "mmproj-model-f16.gguf";
+        if (isQwen(id)) return QWEN_MMPROJ;
+        return MMPROJ_NAME;
     }
 
     /** 某个档案的模型是否齐（主模型必须有）。 */
@@ -522,10 +608,35 @@ public class MainActivity extends Activity {
     }
 
     /**
+     * Qwen3-VL 档的门槛按 PC 实测反推（docs/07）：2B 峰值 3.9 GB、4B 峰值 6.2 GB。
+     * 手机上还要留系统和 WebView 的余量，各加约 2 GB，再取整到 6 / 9 GB。
+     */
+    private boolean canRun2b() {
+        return totalRamBytes() >= 6L * 1024 * 1024 * 1024;
+    }
+
+    private boolean canRun4b() {
+        return totalRamBytes() >= 9L * 1024 * 1024 * 1024;
+    }
+
+    /** 某个档案在这台机器上能不能跑。 */
+    private boolean canRun(String id) {
+        if (ID_35B.equals(id)) return canRun35b();
+        if (ID_4B.equals(id)) return canRun4b();
+        if (ID_2B.equals(id)) return canRun2b();
+        return true;
+    }
+
+    /**
      * 把 assets 里按 400MB 分片的模型（name.000 / name.001 …）顺序拼接还原成 dst。
      * 分片是为了避开单 asset 过大时 AssetManager 的读取问题。
      */
     private boolean extractParts(String baseAsset, File dst, String label) {
+        return extractParts(baseAsset, dst, label, false);
+    }
+
+    /** quiet=true：不往状态栏刷进度，后台预解时用（界面已经在跑了，刷了也没人看）。 */
+    private boolean extractParts(String baseAsset, File dst, String label, boolean quiet) {
         File tmp = new File(dst.getParentFile(), dst.getName() + ".part");
         FileOutputStream out = null;
         long written = 0;
@@ -547,7 +658,7 @@ public class MainActivity extends Activity {
                     while ((n = in.read(buf)) > 0) {
                         out.write(buf, 0, n);
                         written += n;
-                        if (written % (64L * 1024 * 1024) < 1024 * 1024) {
+                        if (!quiet && written % (64L * 1024 * 1024) < 1024 * 1024) {
                             setStatusAsync("正在解出" + label + "…\n已写入 "
                                     + (written / 1048576) + " MB");
                         }
@@ -580,6 +691,46 @@ public class MainActivity extends Activity {
             } catch (IOException ignore) {
             }
         }
+    }
+
+    /**
+     * 1B 的内置副本：装好就已经在 APK 里了，别再等用户点「切到 1B」那一刻才解包——
+     * 正在跑 2B/4B 时顺手先解到盘上，之后切回 1B 就是直接载权重。
+     * 只在 1B 不在盘上、且空闲空间够（约 1.7 GB）时做，quiet 不刷状态栏。
+     */
+    private void prefetch1b() {
+        if (prefetching1b || ID_1B.equals(modelPref()) || modelExists(ID_1B)) return;
+        if (!hasAsset(ASSET_MODEL + ".000")) return;   // 这个包装的是"模型外置"版，没得解
+        try {
+            if (new StatFs(getFilesDir().getAbsolutePath()).getAvailableBytes()
+                    < 2L * 1024 * 1024 * 1024) {
+                return;
+            }
+        } catch (Throwable ignore) {
+            return;
+        }
+        prefetching1b = true;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    File dir = modelDir(ID_1B);
+                    if (!dir.exists() && !dir.mkdirs()) return;
+                    File model = new File(dir, modelFile(ID_1B));
+                    File mmproj = new File(dir, mmprojFile(ID_1B));
+                    boolean did = false;
+                    if (!ready(model)) did |= extractParts(ASSET_MODEL, model, "文本模型", true);
+                    if (ready(model) && !ready(mmproj)) {
+                        did |= extractParts(ASSET_MMPROJ, mmproj, "视觉模块", true);
+                    }
+                    if (did) Log.i(TAG, "内置 1B 已预解出，之后切回 1B 不必再等解包");
+                } catch (Throwable t) {
+                    Log.w(TAG, "预解 1B 失败", t);
+                } finally {
+                    prefetching1b = false;
+                }
+            }
+        }, "prefetch-1b").start();
     }
 
     /** assets 和内部存储都没有模型时的兜底引导页。 */
@@ -646,7 +797,7 @@ public class MainActivity extends Activity {
     /* ==================== 模型包导入（zip） ==================== */
 
     /** 让用户挑一个模型 zip。 */
-    /** 把 JSON 存档写到公共下载目录下的「口袋CPM」文件夹；返回 ok:路径 或 err:原因。 */
+    /** 把 JSON 存档写到公共下载目录下的「口袋小镇」文件夹；返回 ok:路径 或 err:原因。 */
     private String writeArchive(String json, String name) {
         try {
             String base = name == null ? "" : name.trim();
@@ -661,7 +812,7 @@ public class MainActivity extends Activity {
                 cv.put(MediaStore.MediaColumns.DISPLAY_NAME, base);
                 cv.put(MediaStore.MediaColumns.MIME_TYPE, "application/json");
                 cv.put(MediaStore.MediaColumns.RELATIVE_PATH,
-                        Environment.DIRECTORY_DOWNLOADS + "/口袋CPM");
+                        Environment.DIRECTORY_DOWNLOADS + "/口袋小镇");
                 Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
                 if (uri == null) return "err:系统没给出可写位置";
                 OutputStream os = getContentResolver().openOutputStream(uri);
@@ -678,7 +829,7 @@ public class MainActivity extends Activity {
 
             // Android 9 及以下：直接写公共 Download（需要外部存储权限，已在清单里）
             File dir = new File(Environment.getExternalStoragePublicDirectory(
-                    Environment.DIRECTORY_DOWNLOADS), "口袋CPM");
+                    Environment.DIRECTORY_DOWNLOADS), "口袋小镇");
             if (!dir.exists() && !dir.mkdirs()) return "err:无法创建存档目录";
             File f = new File(dir, base);
             FileOutputStream fos = new FileOutputStream(f);
@@ -717,6 +868,66 @@ public class MainActivity extends Activity {
                 if (web == null) return;
                 String arg = err == null ? "null" : JSONObject.quote(err);
                 web.evaluateJavascript("window.onArchiveReady && window.onArchiveReady(" + arg + ")", null);
+            }
+        });
+    }
+
+    /**
+     * 让用户挑一个 .docx。MIME 给的是 docx，但同时放行 zip 和 octet-stream：
+     * 很多文件管理器会把 .docx 报成 application/zip，卡死 MIME 等于让人选不到文件。
+     */
+    private void pickDoc() {
+        if (docParsing) {
+            Toast.makeText(this, "上一份还在解析，稍等", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.ms-word.document.macroEnabled.12",
+                "application/zip", "application/octet-stream"});
+        try {
+            startActivityForResult(i, REQ_DOC);
+        } catch (Throwable t) {
+            Log.e(TAG, "打不开文件选择器", t);
+            jsDocReady("打不开文件选择器");
+        }
+    }
+
+    /** 取用户看到的名字（有的 URI 只有一串编码，光靠 lastPathSegment 没法显示）。 */
+    private String displayName(Uri u) {
+        String name = null;
+        android.database.Cursor c = null;
+        try {
+            c = getContentResolver().query(u, null, null, null, null);
+            if (c != null && c.moveToFirst()) {
+                int i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (i >= 0) name = c.getString(i);
+            }
+        } catch (Throwable ignore) {
+            // 拿不到名字不影响解析，下面退回路径
+        } finally {
+            try {
+                if (c != null) c.close();
+            } catch (Throwable ignore) {
+            }
+        }
+        if (name == null || name.trim().isEmpty()) {
+            name = u.getLastPathSegment();
+        }
+        return name == null ? "文档" : name;
+    }
+
+    /** 通知页面：文档解析完了（err 为 null 表示成功，"cancel" 表示用户取消）。 */
+    private void jsDocReady(final String err) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (web == null) return;
+                String arg = err == null ? "null" : JSONObject.quote(err);
+                web.evaluateJavascript("window.onDocReady && window.onDocReady(" + arg + ")", null);
             }
         });
     }
@@ -842,6 +1053,7 @@ public class MainActivity extends Activity {
                     continue;
                 }
                 if (!name.startsWith("models/") && !name.startsWith("models35/")
+                        && !name.startsWith("models2b/") && !name.startsWith("models4b/")
                         && !name.startsWith("speech/")) continue;
                 if (name.contains("..")) continue;
 
@@ -990,12 +1202,19 @@ public class MainActivity extends Activity {
             cmd.add("--cache-type-v");
             cmd.add("q8_0");
         }
+        if (engineJinja) {
+            // Qwen3-VL 的模板里带 if/else（enable_thinking），C++ 侧解析不了，必须走 jinja
+            cmd.add("--jinja");
+        }
         cmd.add("-t");
         cmd.add(String.valueOf(engineThreads));
         // 混合加速：LLM 留在 CPU（生成最快），仅视觉编码器 offload 到 Adreno GPU（OpenCL）
         cmd.add("-ngl");
         cmd.add("0");
-        if (mmproj != null && gpu) {
+        // Qwen3-VL 的视觉塔在 OpenCL 后端会崩：真机 tombstone 落在
+        // clip_encode → ggml_backend_sched_alloc_graph → ggml_gallocr_alloc_graph，
+        // SIGSEGV 读空指针。1B 的 mmproj 没这个问题，所以只给非 Qwen 开 GPU。
+        if (mmproj != null && gpu && !engineJinja) {
             cmd.add("--mmproj-offload");
         }
         Log.i(TAG, "启动参数: " + cmd);
@@ -1251,6 +1470,55 @@ public class MainActivity extends Activity {
             jsArchiveReady(err);
             return;
         }
+        if (requestCode == REQ_DOC) {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+                jsDocReady("cancel");
+                return;
+            }
+            final Uri u = data.getData();
+            docText = "";
+            docParas = 0;
+            docTruncated = false;
+            docName = displayName(u);
+            docParsing = true;
+            Toast.makeText(this, "正在解析文档…", Toast.LENGTH_SHORT).show();
+            // 解析放在工作线程：几万字的中等文档就要 0.3~1 s，卡 UI 会被系统判为无响应
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    String err = null;
+                    InputStream in = null;
+                    try {
+                        in = getContentResolver().openInputStream(u);
+                        if (in == null) {
+                            err = "读不到这个文件";
+                        } else {
+                            DocxReader.Result rr = DocxReader.read(in);
+                            if (rr.err != null) {
+                                err = rr.err;
+                            } else {
+                                docText = rr.text;
+                                docParas = rr.paras;
+                                docTruncated = rr.truncated;
+                                Log.i(TAG, "文档 " + docName + "：" + rr.text.length()
+                                        + " 字 / " + rr.paras + " 段" + (rr.truncated ? "（已截断）" : ""));
+                            }
+                        }
+                    } catch (Throwable t) {
+                        Log.e(TAG, "读文档失败", t);
+                        err = "读取失败：" + t.getMessage();
+                    } finally {
+                        try {
+                            if (in != null) in.close();
+                        } catch (Throwable ignore) {
+                        }
+                    }
+                    docParsing = false;
+                    jsDocReady(err);
+                }
+            }, "docx-parse").start();
+            return;
+        }
         if (requestCode == REQ_ASR) {
             String text = null;
             String err = null;
@@ -1344,6 +1612,10 @@ public class MainActivity extends Activity {
                         .putString("voice", v).apply();
                 return true;
             }
+            // 音色随 APK 一起发，第一次用这个音色时从 assets 解出来（约 130 MB）
+            if (!voiceReady(v)) {
+                prepareVoice(dir, "speech/" + voiceDirName(v), v);
+            }
             boolean ok = initVoice(dir);
             if (ok) {
                 getSharedPreferences("koudai", MODE_PRIVATE).edit()
@@ -1391,7 +1663,7 @@ public class MainActivity extends Activity {
                         ClipboardManager cm =
                                 (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                         if (cm != null) {
-                            cm.setPrimaryClip(ClipData.newPlainText("口袋CPM", text));
+                            cm.setPrimaryClip(ClipData.newPlainText("口袋小镇", text));
                         }
                     } catch (Throwable t) {
                         Log.w(TAG, "复制失败", t);
@@ -1421,15 +1693,17 @@ public class MainActivity extends Activity {
             });
         }
 
-        /** 切换对话模型："1b" / "35b"，返回是否已导入。 */
+        /** 切换对话模型："1b" / "2b" / "4b" / "35b"，返回是否成功（内存不够或没导入都返回 false）。 */
         @JavascriptInterface
         public boolean setModel(String id) {
-            String v = ID_35B.equals(id) ? ID_35B : ID_1B;
-            if (ID_35B.equals(v) && !canRun35b()) {
-                Log.w(TAG, "拒绝切到 35B：内存不足");
+            String v = ID_1B;
+            if (ID_35B.equals(id) || ID_4B.equals(id) || ID_2B.equals(id)) v = id;
+            if (!canRun(v)) {
+                Log.w(TAG, "拒绝切到 " + v + "：内存不足");
                 return false;
             }
-            if (!modelExists(v)) {
+            // 1B 的权重在安装包里，删了也能重新解出来，所以不要求文件已存在
+            if (!modelExists(v) && !ID_1B.equals(v)) {
                 Log.w(TAG, "切换模型失败，未导入：" + v);
                 return false;
             }
@@ -1438,6 +1712,34 @@ public class MainActivity extends Activity {
             Log.i(TAG, "切换模型到 " + v);
             restartEngineInternal();
             return true;
+        }
+
+        /**
+         * 删掉某一档的模型文件，腾空间。
+         * 拒绝删"正在使用的那档"——引擎进程正 mmap 着它，删了会变成一堆空洞。
+         * 1B 允许删，下次启动会从 assets 重新解出来（慢，但不会坏）。
+         */
+        @JavascriptInterface
+        public boolean modelDelete(String id) {
+            // 只接受四个已知档案；别像第一版那样把陌生 id 当 1B（实测会把内置模型删掉）
+            if (id == null) return false;
+            boolean known = ID_1B.equals(id) || ID_2B.equals(id)
+                    || ID_4B.equals(id) || ID_35B.equals(id);
+            if (!known) return false;
+            String v = id;
+            if (v.equals(modelPref())) {
+                Log.w(TAG, "拒绝删除正在使用的模型：" + v);
+                return false;
+            }
+            File dir = modelDir(v);
+            if (!dir.exists()) return false;
+            long before = dirSize(dir);
+            boolean ok = deleteTree(dir);
+            Log.i(TAG, "删除模型档案 " + v + "：" + (ok ? "完成" : "未删干净")
+                    + "，释放 " + (before / 1073741824.0) + " GB");
+            // 删 1B 会把目录也带走，下次启动 boot() 需要它存在
+            if (!dir.exists()) dir.mkdirs();
+            return ok;
         }
 
         /** 存档：archiveStart → 多次 archiveAppend → archiveFinish 落盘。 */
@@ -1481,6 +1783,50 @@ public class MainActivity extends Activity {
             int to = Math.min(archivePickText.length(), from + Math.max(0, len));
             if (from >= to) return "";
             return archivePickText.substring(from, to);
+        }
+
+        /** 让用户挑一个 .docx，读完通过 window.onDocReady 通知页面。 */
+        @JavascriptInterface
+        public void pickDocx() {
+            ui.post(new Runnable() {
+                @Override
+                public void run() {
+                    pickDoc();
+                }
+            });
+        }
+
+        /** 解析结果的元信息。正文别从这里取——用 docChunk 分片。 */
+        @JavascriptInterface
+        public String docInfo() {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("name", docName == null ? "" : docName);
+                o.put("chars", docText == null ? 0 : docText.length());
+                o.put("paras", docParas);
+                o.put("truncated", docTruncated);
+            } catch (Throwable ignore) {
+            }
+            return o.toString();
+        }
+
+        @JavascriptInterface
+        public String docChunk(int off, int len) {
+            String t = docText;
+            if (t == null) return "";
+            int from = Math.max(0, off);
+            int to = Math.min(t.length(), from + Math.max(0, len));
+            if (from >= to) return "";
+            return t.substring(from, to);
+        }
+
+        /** 丢掉当前文档（换文件或关面板时调用，省内存）。 */
+        @JavascriptInterface
+        public void docClear() {
+            docText = "";
+            docName = "";
+            docParas = 0;
+            docTruncated = false;
         }
 
         @JavascriptInterface
@@ -1681,10 +2027,19 @@ public class MainActivity extends Activity {
             o.put("hasModels", ready(new File(new File(getFilesDir(), "models"), MODEL_NAME)));
             o.put("model", modelPref());
             o.put("has1b", modelExists(ID_1B));
+            // 1B 是不是随安装包发的（决定"删了能不能自动回来"的文案）
+            o.put("bundled1b", hasAsset(ASSET_MODEL + ".000"));
             o.put("has35", modelExists(ID_35B));
             o.put("can35", canRun35b());
             o.put("ramTotalPhys", round1(totalRamBytes() / 1073741824.0));
             o.put("size35", round1(dirSize(new File(getFilesDir(), "models35")) / 1073741824.0));
+            o.put("size1b", round1(dirSize(new File(getFilesDir(), "models")) / 1073741824.0));
+            o.put("has2b", modelExists(ID_2B));
+            o.put("has4b", modelExists(ID_4B));
+            o.put("can2b", canRun2b());
+            o.put("can4b", canRun4b());
+            o.put("size2b", round1(dirSize(new File(getFilesDir(), "models2b")) / 1073741824.0));
+            o.put("size4b", round1(dirSize(new File(getFilesDir(), "models4b")) / 1073741824.0));
             o.put("gpu", gpuActive);
             o.put("warm", EngineHolder.alive());
             o.put("warmSec", EngineHolder.alive()
@@ -1695,8 +2050,14 @@ public class MainActivity extends Activity {
             o.put("voice", voicePref());
             try {
                 JSONObject vv = new JSONObject();
-                for (String[] v : VOICES) vv.put(v[0], voiceReady(v[0]));
+                org.json.JSONArray bundled = new org.json.JSONArray();
+                for (String[] v : VOICES) {
+                    vv.put(v[0], voiceReady(v[0]));
+                    // 随 APK 发布的音色：页面据此把按钮点亮（切过去时才会解出文件）
+                    if (hasAsset("speech/" + v[1] + "/model.onnx.000")) bundled.put(v[0]);
+                }
                 o.put("voices", vv);
+                o.put("bundledVoices", bundled);
             } catch (Throwable ignore) {
             }
             o.put("version", getPackageManager()
@@ -1719,6 +2080,18 @@ public class MainActivity extends Activity {
         long sum = 0;
         for (File k : kids) sum += dirSize(k);
         return sum;
+    }
+
+    /** 递归删目录，返回是否删干净（删到一半失败也要继续，尽量腾出空间）。 */
+    private static boolean deleteTree(File f) {
+        if (f == null || !f.exists()) return true;
+        if (f.isFile()) return f.delete();
+        File[] kids = f.listFiles();
+        boolean ok = true;
+        if (kids != null) {
+            for (File k : kids) ok = deleteTree(k) && ok;
+        }
+        return f.delete() && ok;
     }
 
     /** 系统返回键：聊天页先回列表，列表页才退出。 */

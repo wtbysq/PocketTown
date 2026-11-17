@@ -1,4 +1,4 @@
-package com.koudai.cpm;
+package com.koudai.town;
 
 import android.media.AudioFormat;
 import android.media.AudioManager;

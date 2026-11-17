@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>口袋 CPM · 测试版</title>
+<title>口袋小镇 · 测试版</title>
 <style>
 :root{
   --bg:#f2f3f5; --phone:#ffffff; --surf:#ffffff; --surf2:#f6f7f9;
@@ -359,6 +359,14 @@ input[type=range]::-webkit-slider-thumb{
   color:var(--text2);cursor:pointer;
 }
 .sheet .row2 button.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+/* 文档结果区：复用 md() 的输出，但面板里没有聊天区的样式，单独兜一下 */
+.docout{margin-top:14px;font-size:13.5px;line-height:1.7;color:var(--text)}
+.docout:empty{display:none}
+.docout h3,.docout h4{margin:12px 0 6px;font-size:14px}
+.docout p{margin:0 0 8px}
+.docout li{margin:0 0 5px 18px}
+.docout pre{background:var(--surf2);border:1px solid var(--line);border-radius:9px;padding:9px 11px;overflow-x:auto;font-size:12px}
+.docout code{font-size:12.5px;background:var(--surf2);border-radius:4px;padding:1px 4px}
 .cs-del{
   display:none;width:100%;margin-top:14px;padding:8px 0;border:0;background:none;
   color:var(--err);font:inherit;font-size:13px;cursor:pointer;
@@ -495,6 +503,38 @@ input[type=range]::-webkit-slider-thumb{
 }
 .noterow .x:active{color:var(--err)}
 .notelist .none{font-size:12px;color:var(--text3);padding:2px 0}
+
+/* 结构化记忆格子：两列布局，手机上不额外撑高编辑页。
+   字号比正文小一档，避免和「人设」这种主字段抢视线。 */
+.factgrid{display:grid;grid-template-columns:1fr 1fr;gap:7px 8px}
+.factgrid .fc{min-width:0}
+.factgrid .fc label{display:block;font-size:10.5px;color:var(--text3);margin-bottom:3px;font-weight:500}
+.factgrid .fc input{font-size:12.5px;padding:7px 9px;border-radius:9px}
+
+/* 「记住：…」候选胶囊。虚线边框 = 还没入库，点一下才生效，
+   和实线的按钮区分开，避免用户以为已经记住了。 */
+.candrow{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.candrow button{
+  font-size:11.5px;padding:4px 10px;border-radius:999px;line-height:1.5;
+  border:1px dashed var(--brand);color:var(--brand);background:transparent;
+}
+.candrow button:active{background:var(--brand-soft)}
+
+/* ---------- 「我」页 ---------- */
+/* 顶部头像 + 名字/签名。名字和签名都是 input 直接就地编辑，
+   所以要把 input 默认的边框和底色去掉，让它看起来像标题而不是表单。 */
+.mehead{display:flex;gap:14px;align-items:center;padding:18px 14px 14px}
+.metext{flex:1;min-width:0}
+.metext input{
+  display:block;width:100%;border:0;background:transparent;font-family:inherit;
+  padding:0 0 2px;border-bottom:1px solid transparent;
+}
+.metext input:focus{outline:none;border-bottom-color:var(--brand)}
+#meName{font-size:20px;font-weight:600;color:var(--text)}
+#meBio{font-size:12.5px;color:var(--text2);margin-top:5px}
+/* 资料格子里的输入框沿用 factgrid 那套，只是外面多了张卡片 */
+.mecard{padding:14px;margin:0 14px}
+.mecount{font-size:11px;color:var(--text3);margin:8px 14px 0;line-height:1.6}
 .btn.danger{background:#fdeaea;border-color:#f5c2c2;color:#c0392b}
 .btn.danger:active{background:#f9d7d7}
 .hrow b .gtag{
@@ -565,6 +605,23 @@ input[type=range]::-webkit-slider-thumb{
       </div>
     </div>
 
+    <!-- ============ ME：我（全局的用户资料） ============ -->
+    <div class="screen" id="s-me">
+      <div class="page">
+        <div class="mehead">
+          <div class="cavatar" id="meAvatar" style="width:64px;height:64px;font-size:24px"></div>
+          <div class="metext">
+            <input id="meName" maxlength="12" placeholder="你的名字" autocomplete="off">
+            <input id="meBio" maxlength="40" placeholder="一句话签名，比如：别在深夜找我" autocomplete="off">
+          </div>
+        </div>
+        <div class="card mecard">
+          <div class="factgrid" id="meFacts"></div>
+        </div>
+        <div class="mecount" id="meHint">这些信息会随每次对话发给所有联系人，改完立刻生效。留空的不发，也不占上下文。</div>
+      </div>
+    </div>
+
     <!-- ============ CHAT ============ -->
     <div class="screen" id="s-chat">
       <div class="mstrip" id="mstrip"></div>
@@ -615,19 +672,34 @@ input[type=range]::-webkit-slider-thumb{
 
         <div class="sect">模型</div>
 
-        <div class="card hl" id="card1b">
+        <!-- 这张卡片跟着"引擎里正在跑的那档"走，不是写死的 1B -->
+        <div class="card hl" id="mCard">
           <div class="cardhead">
             <div class="nm">
-              <b>MiniCPM-V 4.7 · 1B</b>
-              <span>本项目唯一封装的模型。Q4_K_M 641 MB ＋ 视觉模块 f16 1.06 GB，Apache-2.0，dense 架构。视觉模块已打兼容补丁（上游 llama.cpp 还没认 4.7 的投影器标识）。</span>
+              <b id="mCardName">—</b>
+              <span id="mCardDesc">—</span>
             </div>
-            <span class="tag on" id="tag1b">检测中…</span>
+            <span class="tag" id="mCardTag">检测中…</span>
           </div>
-          <div class="kv"><span>文本问答</span><b style="color:var(--ok)">可用</b></div>
+          <div class="kv"><span>文本问答</span><b id="mCardText" style="color:var(--text3)">检测中…</b></div>
           <div class="kv"><span>图片理解</span><b id="dotVision" style="color:var(--text3)">检测中…</b></div>
           <div class="kv"><span>运行时</span><b id="rtVer">—</b></div>
-          <div class="kv"><span>上下文</span><b>4096 tokens</b></div>
-          <div class="kv"><span>包内体积</span><b>1.7 GB（已内置）</b></div>
+          <div class="kv"><span>上下文</span><b id="mCardCtx">—</b></div>
+          <div class="kv"><span>本机占用</span><b id="mCardSize">—</b></div>
+        </div>
+
+        <div class="sect">模型档案</div>
+        <div class="card">
+          <div class="cardhead">
+            <div class="nm">
+              <b>切换 / 删除</b>
+              <span>点一行就换到那档（会重启引擎）；右边删掉不用的档腾空间，正在用的那档删不掉。</span>
+            </div>
+            <span class="tag" id="storeTotal">—</span>
+          </div>
+          <div id="modelList"></div>
+          <div class="hint" id="storeFree">—</div>
+          <div class="hint" id="storeHint">1B / 2B / 4B 各是一个独立的模型包（设置 → 模型包 → 导入 .zip）。</div>
         </div>
 
         <div class="sect">说明</div>
@@ -648,6 +720,12 @@ input[type=range]::-webkit-slider-thumb{
               <small>先思考再作答。延迟明显变长，数学和推理题才需要开</small>
             </div>
             <button class="switch" id="swThink" role="switch" aria-checked="false"></button>
+          </div>
+          <div class="rowline">
+            <div class="lb">流式输出
+              <small>逐字显示回答。关掉后等整段生成完再一次性出现，代码和表格不会边生成边跳</small>
+            </div>
+            <button class="switch" id="swStream" role="switch" aria-checked="true"></button>
           </div>
           <div class="rowline">
             <div class="lb">温度
@@ -690,15 +768,14 @@ input[type=range]::-webkit-slider-thumb{
           </div>
           <div class="rowline">
             <div class="lb">模型包
-              <small id="modelHint">文本 / 视觉 / 语音都在同一个 zip 里</small>
+              <small id="modelHint">模型包按档分开发，文件名带模型名（PocketTown-MiniCPM-V-4.7-1B-*.zip 等）；语音和 6 个音色已随安装包内置</small>
             </div>
             <button class="btn sm" id="btnImport">导入 .zip</button>
           </div>
           <div class="rowline">
             <div class="lb">音色包
-              <small id="voicePackHint">内置 2 个音色</small>
+              <small id="voicePackHint">6 个音色随包内置，切换时自动准备</small>
             </div>
-            <button class="btn sm" id="btnImportVoices">导入 .zip</button>
           </div>
           <div class="rowline">
             <div class="lb">分享当前聊天
@@ -708,7 +785,7 @@ input[type=range]::-webkit-slider-thumb{
           </div>
           <div class="rowline">
             <div class="lb">存档与恢复
-              <small id="archHint">存到 Download/口袋CPM，可整个文件夹拷走</small>
+              <small id="archHint">存到 Download/口袋小镇，可整个文件夹拷走</small>
             </div>
             <div class="archbtns">
               <button class="btn sm" id="btnArchive">导出</button>
@@ -748,6 +825,10 @@ input[type=range]::-webkit-slider-thumb{
     <button data-go="contacts">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M15.4 20v-1.6a3.6 3.6 0 0 0-3.6-3.6H6.6A3.6 3.6 0 0 0 3 18.4V20"/><circle cx="9.2" cy="7.4" r="3.4"/><path d="M21 20v-1.6a3.6 3.6 0 0 0-2.7-3.5"/><path d="M15.8 4.2a3.4 3.4 0 0 1 0 6.4"/></svg>
       联系人
+    </button>
+    <button data-go="me">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/></svg>
+      我
     </button>
     <button data-go="model">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 3 7.5 12 12l9-4.5L12 3Z"/><path d="M3 12.5 12 17l9-4.5M3 17 12 21.5 21 17"/></svg>
@@ -791,8 +872,13 @@ input[type=range]::-webkit-slider-thumb{
         <div class="hint">会随每次对话一起发给模型，改了立刻生效。</div>
       </div>
       <div class="field">
-        <label>长期记忆（可选）</label>
-        <textarea id="csMemory" rows="2" placeholder="比如：我叫阿哲，做 Java 后端；回答别太长；不要叫我老板。"></textarea>
+        <label>关于你</label>
+        <div class="hint" id="csFactsHint">你的名字和资料在底部「我」里统一填写，所有联系人共用一份，不用每个都填。</div>
+      </div>
+      <div class="field">
+        <label>长期记忆（可选，补充）</label>
+        <textarea id="csMemory" rows="2" placeholder="上面几栏放不下的再写这里，比如：回答别太长；不要叫我老板。"></textarea>
+        <div class="hint" id="csMemHint"></div>
       </div>
       <div class="field">
         <label>记住的事（<span id="csNoteCount">0</span> 条）</label>
@@ -897,12 +983,46 @@ input[type=range]::-webkit-slider-thumb{
     </div>
   </div>
 
+  <!-- 添加：照片 / 文档 -->
+  <div class="sheet" id="addSheet">
+    <div class="veil" id="asVeil"></div>
+    <div class="panel">
+      <h3>添加</h3>
+      <p class="tip">两种都在本机处理，文件不会离开这台手机。</p>
+      <button class="btn wide primary" id="asImage">照片（看图问答）</button>
+      <button class="btn wide" id="asDoc" style="margin-top:10px">文档（.docx，只读）</button>
+      <div class="row2">
+        <button id="asCancel">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 读文档 -->
+  <div class="sheet" id="docSheet">
+    <div class="veil" id="dcVeil"></div>
+    <div class="panel">
+      <h3>读文档</h3>
+      <p class="tip" id="docMeta">还没有选文件。</p>
+      <div class="field">
+        <label>想让我做什么</label>
+        <textarea id="docTask" rows="2" maxlength="200" placeholder="比如：总结成 5 条要点 / 找出所有金额和时间 / 改写成更口语的说法"></textarea>
+        <div class="hint" id="docHint">正文按段落切块、逐块读，块数越多越慢；只读文字，格式、图片、批注不会读进来。</div>
+      </div>
+      <button class="btn wide" id="docPick" style="margin-top:12px">换一个 .docx 文件</button>
+      <div class="row2">
+        <button id="docClose">关闭</button>
+        <button class="primary" id="docRun" disabled>开始</button>
+      </div>
+      <div class="docout" id="docOut"></div>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
   <div class="mask" id="importMask">
     <div class="meter">
-      <b>正在导入模型包</b>
+      <b id="importTitle">正在导入模型包</b>
       <p id="importText">准备中…</p>
-      <small>解压约 2GB，期间请不要退出或锁屏</small>
+      <small>解压期间请不要退出或锁屏</small>
     </div>
   </div>
   <input type="file" id="fileInput" accept="image/*" hidden>
@@ -912,7 +1032,7 @@ input[type=range]::-webkit-slider-thumb{
 <script>
 "use strict";
 /* ============================================================
-   口袋 CPM · 测试版原型
+   口袋小镇 · 测试版原型
    后端：本机 llama-server（OpenAI 兼容 /v1/chat/completions, SSE）
    ============================================================ */
 
@@ -943,7 +1063,17 @@ const S = {
   opts: {
     think: false, temp: 0.7, maxTok: 768, imgEdge: 1024,
     dark: false, showStat: true, tts: false, asr: true, voice: "female",
+    // 逐字流式。默认开：边生成边显示，长回答不用干等。
+    // 关掉后走非流式（一次拿完整 JSON），代码块/表格不会边生成边跳。
+    stream: true,
   },
+  /**
+   * 用户自己的资料，全局唯一。
+   * 为什么不在每个联系人身上各存一份：同一个用户对三个 AI 说自己的名字，不该填三遍；
+   * 分散存储时改个名字要挨个联系人都改一遍，很容易漏。
+   * 早期版本把 facts 挂在 session 上，load() 里会自动迁移到这里。
+   */
+  me: { name: "", bio: "", city: "", job: "", family: "", like: "", avoid: "" },
   engine: { ok: false, info: "" },
 };
 
@@ -1021,14 +1151,22 @@ window.onAsrState = on => {
   const m = $("#micBtn"); if (m) m.classList.toggle("rec", asrBusy);
   if (asrBusy) toast("正在听…说完会自动停，再点一次麦克风也行", 3000);
 };
-/** 模型包导入进度（由原生侧调用） */
-window.onImportStatus = t => {
+/** 全屏遮罩：导入模型包、切换模型时挡住界面，避免用户乱点 */
+function showMask(title, text){
   const mask = $("#importMask");
   if (!mask) return;
-  mask.classList.add("show");
+  const t = $("#importTitle");
+  if (t) t.textContent = title || "请稍候";
   const p = $("#importText");
-  if (p) p.textContent = String(t || "").replace(/\n/g, " ");
-};
+  if (p) p.textContent = String(text || "").replace(/\n/g, " ");
+  mask.classList.add("show");
+}
+function hideMask(){
+  const mask = $("#importMask");
+  if (mask) mask.classList.remove("show");
+}
+/** 模型包导入进度（由原生侧调用） */
+window.onImportStatus = t => showMask("正在导入模型包", t);
 
 /* ---------------- 联系人（一个联系人 = 一条会话） ---------------- */
 const LS = "pocketcpm.v1";
@@ -1041,6 +1179,28 @@ const MAX_GROUPS = 40;
 const MAX_NOTE_CHARS = 60;
 const MAX_NOTES = 30;
 const MAX_NOTES_CHARS = 900;
+
+/**
+ * 结构化记忆（facts）。
+ * 为什么做这个：11-08 真机测试里"结构化记忆卡"组 100%、"自由文本长期记忆"组只有 50%。
+ * 为什么用问答式注入：第一版写成「关于用户：- 用户叫阿哲」，用真实 1B 一测就露馅——
+ *   模型会把用户的名字认成自己的（答"我是阿哲"），三种问法全错。
+ *   在 testbed/ab-facts.py 里比了 5 种写法（每种 3 次采样），问答式混淆 0 次、答非所问 0 次，
+ *   而关系式（"他叫阿哲，你称呼他阿哲"）反而混淆 2/3。
+ *   testbed/facts-qa-check.py 再用 6 项事实确认：8/8 命中，且模型不会照抄「问：…答：…」格式。
+ * q 是注入用的问句（模型理解"谁是谁"靠的是问句里的主语，不是前缀词）。
+ * raw 表示不加问句、原样输出（祈使句，套进问答会变成病句）。
+ */
+const MAX_MEMORY_CHARS = 400;
+const FACT_FIELDS = [
+  { k: "city",   label: "住在哪",     ph: "杭州",           q: "他住在哪" },
+  { k: "job",    label: "在做什么",   ph: "Java 后端",      q: "他是做什么的" },
+  { k: "family", label: "家里人",     ph: "老婆、一个女儿", q: "他家里有什么人" },
+  { k: "like",   label: "喜欢什么",   ph: "喝美式、跑步",   q: "他喜欢什么" },
+  { k: "avoid",  label: "别踩这些",   ph: "别提加班",       raw: true },
+];
+// 名字不放在 FACT_FIELDS 里：它有自己的输入框（「我」页标题位），
+// 而且 detectFacts 的"自称"候选也直接写进 S.me.name，不走这套格子。
 
 /** 两位形象（女版 / 男版），打包在 assets/img 下，直接当头像用。 */
 const AV_CHARS = [
@@ -1124,7 +1284,9 @@ function load(){
     const d = JSON.parse(localStorage.getItem(LS) || "{}");
     S.sessions = d.sessions || [];
     Object.assign(S.opts, d.opts || {});
-  }catch(e){ S.sessions = []; }
+    // 必须放在 sessions 之后：迁移逻辑要翻联系人身上的旧 facts
+    normalizeMe(d.me);
+  }catch(e){ S.sessions = []; normalizeMe(null); }
   S.sessions.forEach((s, i) => {
     s.kind = s.kind || "single";
     s.msgs = s.msgs || [];
@@ -1142,6 +1304,8 @@ function load(){
     s.name = s.title;
     s.persona = s.persona || "";
     s.memory = s.memory || "";
+    // 老存档没有 facts 字段，补空对象；memory 原样保留，不自动切分（切错会丢信息）
+    s.facts = (s.facts && typeof s.facts === "object") ? s.facts : {};
     if (!s.avatar) s.avatar = presets()[i % presets().length];
   });
   if (!S.sessions.length) defaultContact();
@@ -1153,6 +1317,37 @@ function load(){
     if (n) console.log("已纠正旧记录里的自称：" + n + " 条");
   }
 }
+/**
+ * 补齐并清洗 S.me（全局用户资料）。
+ * 除了防脏数据，还负责一次迁移：早期版本把 facts 挂在每个联系人身上
+ * （session.facts），现在统一到全局。如果不迁移，老用户升级后名字就"丢了"。
+ * 迁移策略是"取第一个非空值"，不覆盖已经存在的全局值。
+ */
+function normalizeMe(raw){
+  const m = (raw && typeof raw === "object") ? raw : {};
+  const pick = v => String(v || "").trim();
+  S.me = {
+    name: pick(m.name), bio: pick(m.bio),
+    city: pick(m.city), job: pick(m.job), family: pick(m.family),
+    like: pick(m.like), avoid: pick(m.avoid),
+  };
+  // 全局没名字时，翻联系人身上的旧 facts.you
+  if (!S.me.name){
+    for (const s of S.sessions){
+      const v = pick((s && s.facts && s.facts.you) || "");
+      if (v){ S.me.name = v; break; }
+    }
+  }
+  // 其余字段同样补一次，逐项取第一个非空
+  FACT_FIELDS.forEach(x => {
+    if (S.me[x.k]) return;
+    for (const s of S.sessions){
+      const v = pick((s && s.facts && s.facts[x.k]) || "");
+      if (v){ S.me[x.k] = v; break; }
+    }
+  });
+}
+
 /** 一次性迁移：把群聊历史里“我是<别人>”的说法改成自己（只改自称，不动正文）。 */
 function migrateNames(){
   let n = 0;
@@ -1175,13 +1370,14 @@ function defaultContact(){
   const s = {
     id: "s" + Date.now() + Math.random().toString(36).slice(2, 6), title: "口袋", name: "口袋",
     persona: "手机里的离线小助手：说话轻松、克制，不说客套话。",
-    memory: "", avatar: "img/char_f.jpg", msgs: [], at: Date.now(),
+    memory: "", facts: {}, avatar: "img/char_f.jpg", msgs: [], at: Date.now(),
   };
   S.sessions.unshift(s);
   return s;
 }
 function save(){
-  const dump = () => JSON.stringify({ sessions: S.sessions, opts: S.opts });
+  // me 一起存：用户资料是全局的，丢了就等于所有联系人都不认识你了
+  const dump = () => JSON.stringify({ sessions: S.sessions, opts: S.opts, me: S.me });
   try { localStorage.setItem(LS, dump()); return true; } catch (e) {}
   // 空间不够：先丢掉最老会话里的图片再试一次，别让改动整个丢在内存里
   let freed = 0;
@@ -1210,7 +1406,7 @@ function createContact(o){
   }
   const s = {
     id: "s" + Date.now() + Math.random().toString(36).slice(2, 6), title: o.name, name: o.name,
-    persona: o.persona || "", memory: o.memory || "",
+    persona: o.persona || "", memory: o.memory || "", facts: o.facts || {},
     avatar: o.avatar || presets()[0], msgs: [], at: Date.now(),
     voice: o.voice || "female", read: !!o.read,
   };
@@ -1299,6 +1495,9 @@ function systemPrompt(s, who){
     ].filter(Boolean);
     if (me.persona) lines.push(`你的人设（必须始终遵守）：\n${me.persona}`);
     else lines.push("你没有特别设定，用平常口吻说话。");
+    // 用户资料是全局的（S.me），不再按联系人各存一份
+    const userFacts = meBlock();
+    if (userFacts) lines.push(userFacts);
     if (me.memory) lines.push(`你记得的关于用户的事：\n${me.memory}`);
     const meNotes = notesBlock(me);
     if (meNotes) lines.push(meNotes);
@@ -1313,6 +1512,9 @@ function systemPrompt(s, who){
     `你在这台手机里离线运行，是用户的私聊对象，名字叫「${name}」，对方是用户本人。`,
   ];
   if (s && s.persona) lines.push(`你的人设（始终遵守）：\n${s.persona}`);
+  // 用户资料全局共用；放在人设之后、自由记忆之前（信息密度最高）
+  const userFacts = meBlock();
+  if (userFacts) lines.push(userFacts);
   if (s && s.memory) lines.push(`你记得的关于用户的事：\n${s.memory}`);
   const soloNotes = notesBlock(s);
   if (soloNotes) lines.push(soloNotes);
@@ -1327,7 +1529,7 @@ function systemPrompt(s, who){
   return lines.join("\n");
 }
 /** 顶部栏：首页「消息」、聊天显示联系人、其它页跟着页名走。 */
-const SCREEN_TITLE = { home: "消息", chat: "联系人", contacts: "联系人", model: "模型", settings: "设置" };
+const SCREEN_TITLE = { home: "消息", chat: "联系人", contacts: "联系人", me: "我", model: "模型", settings: "设置" };
 function paintHeader(){
   const act = document.querySelector(".screen.active");
   const name = act ? act.id.replace(/^s-/, "") : "home";
@@ -1377,7 +1579,10 @@ function renderChat(){
   renderMemberStrip(s);
   paintHeader();
   if (!s.msgs.length){ renderWelcome(box); return; }
-  s.msgs.forEach(m => box.appendChild(msgNode(m)));
+  // 传"距离末尾还有几条"给 msgNode：候选胶囊只在最近几条消息上显示，
+  // 免得翻历史时满屏都是没点过的旧胶囊（数据仍保留，只是不渲染）
+  const n = s.msgs.length;
+  s.msgs.forEach((m, i) => box.appendChild(msgNode(m, n - i)));
   scrollBottom();
 }
 function renderEmpty(box){
@@ -1429,7 +1634,12 @@ function renderWelcome(box){
   w.querySelector("#welcomeAv").onclick = () => { if (s) openContactSheet(s); };
   box.appendChild(w);
 }
-function msgNode(m){
+/**
+ * 渲染一条消息。
+ * @param m 消息对象
+ * @param fromEnd 这条消息距离最新一条有多少条（1 = 最新）。只用来决定候选胶囊显不显示。
+ */
+function msgNode(m, fromEnd){
   const s = curSession();
   const g = isGroup(s);
   const who = (g && m.who) ? S.sessions.find(x => x.id === m.who) : s;
@@ -1454,8 +1664,10 @@ function msgNode(m){
   if (m.role !== "user" && m.text){
     b.appendChild(actionNode(m));
   }
-  if (m.role === "user" && m.ts){
-    // 用户消息不显示统计
+  // 用户消息下面挂「记住：你叫X」候选胶囊（见 candNode 顶部注释）。
+  // 只在最近 3 条里显示：老消息上的候选多半是用户看过但不想记的，一直挂着只会碍眼。
+  if (m.role === "user" && m.cand && m.cand.length && fromEnd <= 3){
+    b.appendChild(candNode(m));
   }
   row.appendChild(b);
   if (m.role !== "user") bindLongPress(b, () => openMsgSheet(m, g ? who : s));
@@ -1481,10 +1693,45 @@ function actionNode(m){
   });
   return acts;
 }
+/**
+ * 用户消息下的候选记忆胶囊。
+ * 为什么挂在用户消息上而不是 AI 回复上：这些是「关于用户」的事实，
+ * 挂在用户自己说的话旁边，用户一眼就知道 App 从哪句话里听出来的。
+ * 虚线样式表示还没入库，点一下才写进 facts。
+ */
+function candNode(m){
+  const wrap = el("div", "candrow");
+  m.cand.forEach(c => {
+    const btn = el("button", null, "记住：" + (FACT_SAY[c.k] || "") + c.value + " ＋");
+    btn.onclick = () => takeCand(m, c);
+    wrap.appendChild(btn);
+  });
+  return wrap;
+}
+/** 采纳一条候选：写进全局 S.me，然后把这条胶囊从消息上摘掉。 */
+function takeCand(m, c){
+  // 资料是全局的，不再写到某个联系人身上（早期版本写 s.facts）
+  const key = c.k === "you" ? "name" : c.k;
+  const old = String(S.me[key] || "").trim();
+  S.me[key] = c.value;
+  // 摘掉这一项；全摘完就删掉整个字段，别在存档里留空数组
+  m.cand = (m.cand || []).filter(x => x.k !== c.k);
+  if (!m.cand.length) delete m.cand;
+  save();
+  toast(old && old !== c.value
+    ? "已改成：" + (FACT_SAY[c.k] || "") + c.value
+    : "记住了：" + (FACT_SAY[c.k] || "") + c.value);
+  renderChat();
+  refreshLists();
+  // 如果刚好在「我」页面，同步刷新表单
+  if ($("#s-me") && $("#s-me").classList.contains("active")) paintMe();
+}
+
 function statNode(st){  const d = el("div", "meta");
   const parts = [];
   if (st.tps) parts.push(`<b>${st.tps.toFixed(1)}</b> tok/s`);
-  if (st.first) parts.push(`首字 <b>${st.first.toFixed(2)}</b> s`);
+  // 非流式时 first 是"整段到手"的耗时，写「首字」会误导，所以换标签
+  if (st.first) parts.push((st.whole ? "整段 " : "首字 ") + `<b>${st.first.toFixed(2)}</b> s`);
   if (st.tok) parts.push(`<b>${st.tok}</b> tokens`);
   if (st.total) parts.push(`共 <b>${st.total.toFixed(1)}</b> s`);
   d.innerHTML = parts.join(" · ");
@@ -1576,9 +1823,9 @@ function fixSelfName(text, me, g){
   if (!me) return out;
   const my = String(me.title || "").trim();
   if (!my) return out;
-  // 被「你不就是口袋CPM吗」这类追问戳中时，模型会掉到训练里的模型身份
+  // 被「你不就是口袋小镇吗」「你不就是个模型吗」这类追问戳中时，模型会掉到训练里的模型身份
   // （MiniCPM / 面壁智能 / OpenBMB），这类回答整句不可信，直接换回自己
-  if (PROMPT_FIX && /MiniCPM|面壁智能|OpenBMB|口袋\s*CPM|Koudai\s*CPM/i.test(out)) return `我是${my}。`;
+  if (PROMPT_FIX && /MiniCPM|面壁智能|OpenBMB|口袋\s*CPM|口袋\s*小镇|Koudai\s*CPM|Pocket\s*Town|通义千问|Qwen|阿里(云|巴巴)/i.test(out)) return `我是${my}。`;
   const others = (g ? membersOf(g) : contacts())
     .filter(x => x.id !== me.id)
     .map(x => String(x.title || "").trim())
@@ -1700,6 +1947,74 @@ function mentionedMember(g, text){
   return all.length ? all[0] : null;
 }
 
+/* ---------------- 结构化记忆（关于用户的短句） ---------------- */
+/**
+ * 把用户资料渲染成提示词片段。不传参就用全局 S.me，传对象便于单测。
+ * 返回空串表示什么都没填，调用方直接跳过。
+ * 用问答式（问：…答：…）而不是「- 用户叫阿哲」：后者被 1B 当成自己的属性，
+ * 实测会把用户名字认成 AI 自己的名字（详见 FACT_FIELDS 上的注释与 testbed/ab-facts.py）。
+ * 名字排最前、签名次之，因为这两项最常被问。
+ */
+function meBlock(m){
+  const u = m || S.me || {};
+  const lines = [];
+  const name = String(u.name || "").trim();
+  const bio = String(u.bio || "").trim();
+  if (name) lines.push(`问：和你聊天的人叫什么？答：${name}`);
+  // 签名是自由发挥的一句话，套进问答式让 1B 明白"这是在形容对方"
+  if (bio) lines.push(`问：他是个什么样的人？答：${bio}`);
+  FACT_FIELDS.forEach(x => {
+    if (x.raw) return;
+    const v = String(u[x.k] || "").trim();
+    if (v) lines.push(`问：${x.q}？答：${v}`);
+  });
+  // 祈使句不进问答：那是行为约束，不是可背诵的事实
+  const avoid = String(u.avoid || "").trim();
+  if (avoid) lines.push(`说话时注意：${avoid}`);
+  return lines.join("\n");
+}
+
+/**
+ * 从一句自由文本里嗅出可能的结构化事实。
+ * 刻意不调模型：1B 做信息抽取既慢又不稳，正则零成本、命中可预期、误记可解释。
+ * 返回 [{k, label, value}]，只作为"候选"，必须用户点一下才入库。
+ */
+const FACT_STOP = ["什么", "谁", "啥", "你", "他", "她", "自己", "哪", "哪儿", "这里", "那儿"];
+/** 候选胶囊的口语说法。用「你叫X」而不是「称呼 X」，是因为这是给用户看的一句话，不是表单项标签。 */
+const FACT_SAY = { you: "你叫", city: "你住", job: "你做", like: "你喜欢", avoid: "你讨厌" };
+function detectFacts(text){
+  const t = String(text || "");
+  // 超过 120 字多半是长段落叙述，逐句匹配容易误抓，直接放弃
+  if (!t || t.length > 120) return [];
+  const hit = [];
+  const push = (k, value, label) => {
+    const v = String(value || "").trim().replace(/[，。！？、,.!?\s]+$/, "");
+    if (v.length < 1 || v.length > 12) return;
+    if (FACT_STOP.some(s => v === s || v.indexOf(s) === 0)) return;
+    if (hit.some(h => h.k === k)) return;   // 同一类只留第一条
+    hit.push({ k, label, value: v });
+  };
+  // 自称。前置一个边界字符，避免「我叫我妈过来」这类把动词当名字
+  let m = t.match(/(?:^|[，。！？、\s])我(?:的名字是|名字叫|叫)([\u4e00-\u9fa5A-Za-z]{1,6})/);
+  if (m) push("you", m[1], "称呼");
+  // 居住地：「我住在杭州」「我家在杭州」「我是杭州人」。
+  // 允许省略主语（「我叫阿哲，住在杭州」），但主语只能空着或就是「我」——
+  // 「他住在杭州」前面若跟着逗号，会被这里挡住的是"他"这个字，不会误记。
+  m = t.match(/(?:^|[，。！？、\s])(?:我)?(?:住在|家住|家在)([\u4e00-\u9fa5]{2,8})/)
+    || t.match(/我是([\u4e00-\u9fa5]{2,6})人/);
+  if (m) push("city", m[1], "城市");
+  // 职业：只收「我是做X的 / 我是干X的」这种句式。
+  // 不用「我在X工作」——那个 X 是地点不是职业，收到 job 里会变成「你在杭州」的错义。
+  m = t.match(/我是(?:做|干)([^，。！？]{2,8})的/);
+  if (m) push("job", m[1], "工作");
+  // 喜好 / 雷区。「爱」单字太容易误伤（「我爱咋咋地」），所以要求跟一个字以上
+  m = t.match(/我(?:很|特别|超|挺|最)?(?:喜欢|爱|迷上了|在追)([^，。！？]{1,12})/);
+  if (m) push("like", m[1], "喜欢");
+  m = t.match(/我(?:很|特别|最|真|超)?(?:讨厌|不喜欢|受不了|烦)([^，。！？]{1,12})/);
+  if (m) push("avoid", m[1], "别踩");
+  return hit;
+}
+
 /* ---------------- 长期记忆（记忆卡） ---------------- */
 /** 把记忆条目拼成提示词片段（越靠后越新）。 */
 /** 记忆卡块。 */
@@ -1776,7 +2091,7 @@ function delNote(c, id){
 }
 
 /* ---------------- 音色 ---------------- */
-/** 可选音色：前两个随包内置，后四个来自「音色包」。 */
+/** 可选音色：六个全部随安装包发布，用到哪个解哪个（老包的「音色包」zip 仍可导入）。 */
 const VOICES = [
   { k: "female", n: "女声 · 温柔" },
   { k: "bronya", n: "女声 · 清冷" },
@@ -1785,9 +2100,11 @@ const VOICES = [
   { k: "zzl", n: "男声 · 沉稳" },
   { k: "doom", n: "男声 · 低沉" },
 ];
-/** 这个音色在本机可用吗（内置两个默认可用）。 */
+/** 这个音色能不能用：随包发的算可用（切过去时自动解出），否则看本机有没有导入过。 */
 function voiceOk(k){
-  const v = S.dev && S.dev.voices;
+  const d = S.dev || {};
+  if ((d.bundledVoices || []).indexOf(k) >= 0) return true;
+  const v = d.voices;
   if (!v) return k === "female" || k === "male";
   return !!v[k];
 }
@@ -1931,6 +2248,8 @@ function showScreen(name){
     const go = b.dataset.go;
     b.classList.toggle("active", go === name || (name === "chat" && go === "home"));
   });
+  // 「我」页每次都重新铺一遍：可能在别处（比如候选胶囊）改过 S.me
+  if (name === "me") paintMe();
   paintHeader();
 }
 
@@ -1956,6 +2275,226 @@ function nativeInfo(){
   if (!HAS("deviceInfo")) return null;
   try{ return JSON.parse(NATIVE.deviceInfo() || "null"); }catch(e){ return null; }
 }
+
+/** 每档的说明书；顶部卡片按"当前加载的那档"取这里的内容。 */
+const MODEL_INFO = {
+  "1b": {
+    name: "MiniCPM-V 4.7 · 1B",
+    desc: "默认档。Q4_K_M 641 MB ＋ 视觉模块 f16 1.06 GB，Apache-2.0，dense 架构。视觉模块已打兼容补丁（上游 llama.cpp 还没认 4.7 的投影器标识）。",
+    ctx: "8192 tokens（q8 KV）",
+  },
+  "2b": {
+    name: "Qwen3-VL · 2B",
+    desc: "导入档。Q4_K_M 约 1.8 GB ＋ mmproj f16，Apache-2.0。读数比 1B 稳一点，这版只能文字。",
+    ctx: "8192 tokens（q8 KV）",
+  },
+  "4b": {
+    name: "Qwen3-VL · 4B",
+    desc: "导入档。Q4_K_M 3.1 GB ＋ mmproj f16，Apache-2.0。最准也最慢，这版只能文字。",
+    ctx: "4096 tokens（f16 KV）",
+  },
+  "35b": {
+    name: "MiniCPM-V 4.7 · 35B-A3B",
+    desc: "导入档。q3gud 混合专家，要 16 GB 以上内存，本机不开放入口。",
+    ctx: "2048 tokens",
+  },
+};
+
+/**
+ * 引擎里真正在跑的是哪档：以 /props 的 model_path 为准，
+ * 拿不到才退回原生偏好（pref 在切换成功时会被写成实际加载的档）。
+ */
+function loadedModelId(n){
+  const p = (S.engine && S.engine.path) || "";
+  if (/models4b/i.test(p)) return "4b";
+  if (/models2b/i.test(p)) return "2b";
+  if (/models35/i.test(p)) return "35b";
+  if (/[\\/]files[\\/]models[\\/]/i.test(p)) return "1b";
+  return (n && n.model) || "1b";
+}
+
+/** 模型页：上面一张卡跟着当前加载的档，下面一个列表负责切换和删除。 */
+function paintModelPage(n){
+  const cur = loadedModelId(n);
+  const info = MODEL_INFO[cur] || MODEL_INFO["1b"];
+  const put = (sel, v) => { const e = $(sel); if (e) e.textContent = v; };
+  put("#mCardName", info.name);
+  put("#mCardDesc", info.desc);
+  put("#mCardCtx", info.ctx);
+  const size = n ? ({ "1b": n.size1b, "2b": n.size2b, "4b": n.size4b, "35b": n.size35 })[cur] : null;
+  put("#mCardSize", size ? size + " GB" : "—");
+
+  // 状态徽标以引擎实测为准：连上了才说"已加载"
+  const live = !!(S.engine && S.engine.ok);
+  const tag = $("#mCardTag");
+  if (tag){
+    tag.textContent = live ? (S.engine.vision ? "已加载 · 视觉" : "已加载 · 仅文本") : "未连接";
+    tag.className = "tag " + (live ? "on" : "off");
+  }
+  const tv = $("#mCardText");
+  if (tv){
+    tv.textContent = live ? "可用" : "未连接";
+    tv.style.color = live ? "var(--ok)" : "var(--err)";
+  }
+
+  const rows = [
+    { id: "1b", name: "MiniCPM-V 4.7 · 1B", has: !!(n && n.has1b), can: true, size: n && n.size1b, need: "1.7" },
+    { id: "2b", name: "Qwen3-VL · 2B", has: !!(n && n.has2b), can: !n || n.can2b !== false, size: n && n.size2b, need: "1.8" },
+    { id: "4b", name: "Qwen3-VL · 4B", has: !!(n && n.has4b), can: !n || n.can4b !== false, size: n && n.size4b, need: "3.1" },
+  ];
+  if (n && (n.has35 || cur === "35b")){
+    rows.push({ id: "35b", name: "MiniCPM-V 4.7 · 35B", has: !!n.has35, can: n.can35 !== false, size: n.size35, need: "15.5" });
+  }
+
+  const box = $("#modelList");
+  if (box){
+    box.innerHTML = "";
+    let total = 0;
+    rows.forEach(r => {
+      total += (r.size || 0);
+      const isCur = r.id === cur;
+      const usable = r.has && r.can && !isCur;
+      const line = el("div", "rowline");
+      if (usable) line.style.cursor = "pointer";
+      const lb = el("div", "lb", r.name);
+      const sub = el("small", "", (r.size ? r.size + " GB · " : "")
+        + (isCur ? "正在使用" : (r.has ? "已导入" : (r.can ? "未导入（需 " + r.need + " GB）" : "未导入 · 内存不足"))));
+      if (isCur) sub.style.color = "var(--ok)";
+      if (!r.has || !r.can) sub.style.color = "var(--text3)";
+      lb.appendChild(sub);
+      line.appendChild(lb);
+
+      if (r.has){
+        const d = el("button", "btn danger", isCur ? "使用中" : "删除");
+        d.style.padding = "6px 12px";
+        d.style.fontSize = "12px";
+        if (isCur){ d.disabled = true; d.style.opacity = ".45"; }
+        else d.onclick = e => { e.stopPropagation(); askDeleteModel(r); };
+        line.appendChild(d);
+      }
+      if (usable) line.onclick = () => switchModel(r.id);
+      box.appendChild(line);
+    });
+    const tot = $("#storeTotal");
+    if (tot) tot.textContent = total ? total.toFixed(1) + " GB" : "0 GB";
+  }
+  const free = $("#storeFree");
+  if (free) free.textContent = (n && n.storageFree != null)
+    ? ("手机还剩 " + n.storageFree + " GB 可用" + (n.can4b ? "" : "（4B 需 9 GB 内存，本机跑不动）"))
+    : "删除只腾空间，不影响聊天记录";
+  const hint = $("#storeHint");
+  if (hint) hint.textContent = (n && n.bundled1b)
+    ? "1B 随安装包发布，删掉后会在后台自动解回来；2B / 4B 删掉要用模型包重新导入。"
+    : "1B / 2B / 4B 各是一个独立的模型包（设置 → 模型包 → 导入 .zip），删掉的档要重新导入。";
+}
+
+const MODEL_META = {
+  "1b": { name: "MiniCPM-V 4.7 · 1B", mem: "约 1.1 GB", sec: "10–20 秒", note: "可以看图，回答最快" },
+  "2b": { name: "Qwen3-VL · 2B", mem: "约 2.5 GB", sec: "20–40 秒", note: "只能文字（这版看不了图）" },
+  "4b": { name: "Qwen3-VL · 4B", mem: "约 3.9 GB", sec: "40–90 秒", note: "只能文字（这版看不了图），最慢" },
+};
+
+/**
+ * 切换模型不是换个下拉框——要停掉正在跑的引擎、重新加载另一份权重。
+ * 所以：先确认、再全屏遮罩、等引擎真的起来才算成功，失败了退回原来那档，
+ * 绝不把用户留在"引擎已经停了但新的没起来"的状态。
+ */
+function switchModel(id){
+  if (!HAS("setModel")){ toast("切换模型只在 App 里可用"); return; }
+  if (!id || !MODEL_META[id]){ return; }
+  const cur = loadedModelId(S.dev);
+  if (cur === id){ toast("已经是这个模型了"); return; }
+  if (S.busy){ toast("等这句话说完（或点停止）再切模型", 2800); return; }
+  if (docBusy){ toast("文档还在处理，先停下再切模型", 2800); return; }
+  const m = MODEL_META[id];
+  askConfirm("切换到 " + m.name + "？",
+    "会重启本地引擎，" + m.sec + " 内不能聊天。占用内存 " + m.mem + "，" + m.note
+    + "。<br>聊天记录、人设、记忆都不受影响。",
+    "切换", () => doSwitch(id, cur));
+}
+
+async function doSwitch(id, before){
+  closeConfirm();
+  const m = MODEL_META[id] || { name: id };
+  showMask("正在切换模型", "正在重启引擎…0 秒");
+  S.busy = true; syncSend();
+  const t0 = Date.now();
+  const timer = setInterval(() => {
+    const p = $("#importText");
+    if (p) p.textContent = "正在重启引擎…" + Math.round((Date.now() - t0) / 1000)
+      + " 秒（首次加载会更久，别退出）";
+  }, 900);
+
+  let ok = false;
+  try{
+    if (NATIVE.setModel(id)){
+      for (let i = 0; i < 150; i++){
+        await new Promise(r => setTimeout(r, 1000));
+        if (await probe()){ ok = true; break; }
+      }
+    }
+  } catch (e){
+    ok = false;
+  } finally {
+    clearInterval(timer);
+    S.busy = false; syncSend();
+  }
+
+  // probe 通只说明"有个引擎在跑"，还得确认跑的就是刚点的这档：
+  // 新档起不来时原生侧会自己退回 1B，那时候说"已切到 4B"就是在骗人。
+  if (ok){
+    const n = nativeInfo();
+    if (n && n.model && n.model !== id) ok = false;
+  }
+
+  if (ok){
+    hideMask();
+    paintDevice();
+    toast("已切到 " + m.name, 2600);
+    return;
+  }
+
+  // 起不来：退回原来那档，不然用户手里是一台"没有脑子"的手机。
+  // 原生侧（boot 的回退）可能已经自己退回原档了，那就别再重启一遍引擎。
+  const from = nativeInfo();
+  const alreadyBack = !!(from && from.model === before);
+  const p = $("#importText");
+  if (p) p.textContent = alreadyBack
+    ? "没加载成功，已经退回原来的模型…"
+    : "没加载成功，正在退回原来的模型…";
+  if (!alreadyBack && before && before !== id && NATIVE.setModel(before)){
+    for (let i = 0; i < 150; i++){
+      await new Promise(r => setTimeout(r, 1000));
+      if (await probe()) break;
+    }
+  }
+  hideMask();
+  paintDevice();
+  toast("这个模型没起来，已退回原来那档。引擎日志在模型页底部", 4200);
+}
+function askDeleteModel(r){
+  const builtIn = !!(S.dev && S.dev.bundled1b) && r.id === "1b";
+  askConfirm("删除 " + r.name + "？",
+    "会释放约 " + (r.size || "?") + " GB，聊天记录、人设、记忆都不受影响。"
+    + (builtIn
+      ? "<br>1B 是随安装包发的，删掉后会在后台自动解回来（约 1 分钟，不影响聊天）。"
+      : "<br>以后要用得重新导入模型包。"),
+    "删除", () => doDeleteModel(r));
+}
+
+function doDeleteModel(r){
+  closeConfirm();
+  if (!HAS("modelDelete")){ toast("这个版本不支持删除模型", 2400); return; }
+  showMask("正在删除", "正在删除 " + r.name + "…");
+  let ok = false;
+  try { ok = !!NATIVE.modelDelete(r.id); } catch (e){ ok = false; }
+  hideMask();
+  paintDevice();
+  toast(ok
+    ? ("已删除 " + r.name + "，释放约 " + (r.size || "?") + " GB")
+    : "删除失败：它可能正在被使用", 3200);
+}
+
 function paintDevice(){
   const n = S.dev = nativeInfo();
   const mem = n ? n.ramTotal : (navigator.deviceMemory || null);
@@ -1996,34 +2535,8 @@ function paintDevice(){
   if (mh) mh.textContent = (n && n.hasModels)
     ? ("已导入 " + (n.modelsSize || 0) + " GB 模型")
     : "还没有模型，点右边导入 zip";
-  // 模型档案（1B / 35B）
-  const seg = $("#modelSeg");
-  if (seg && n){
-    seg.querySelectorAll("button").forEach(b => {
-      const id = b.dataset.model;
-      const has = id === "35b" ? (!!n.has35 && n.can35 !== false) : !!n.has1b;
-      b.disabled = !has;
-      b.style.opacity = has ? "1" : ".4";
-      b.classList.toggle("on", id === n.model);
-    });
-    const hint = $("#modelSelHint");
-    if (hint){
-      hint.textContent = (n.can35 === false)
-        ? ("本机内存 " + (n.ramTotalPhys || "?") + " GB，跑不了 35B（需 16 GB 以上）")
-        : "1B 快；35B-A3B 更聪明但慢很多";
-    }
-  }
-  const m35 = $("#m35Size"), m352 = $("#m35Size2");
-  const gb = (n && n.size35) ? (n.size35 + " GB") : "未导入";
-  if (m35) m35.textContent = gb;
-  if (m352) m352.textContent = gb;
-  const t35 = $("#tag35");
-  if (t35 && n){
-    t35.textContent = n.has35 ? "已导入" : "未导入";
-    t35.className = "tag " + (n.has35 ? "on" : "warn");
-  }
-  const chip = $("#modelChip");
-  if (chip && n) chip.textContent = n.model === "35b" ? "35B · A3B" : "1B · Q4_K_M";
+  // 模型页：卡片跟当前加载的档，列表负责切换 + 删除
+  paintModelPage(n);
   const av = $("#appVer");
   if (av) av.textContent = (n && n.version) ? n.version : "—";
 
@@ -2037,8 +2550,10 @@ function paintDevice(){
     const vp = $("#voicePackHint");
     if (vp){
       const cnt = VOICES.filter(v => voiceOk(v.k)).length;
+      const bundled = (n.bundledVoices || []).length;
       vp.textContent = cnt >= VOICES.length
-        ? ("全部 " + VOICES.length + " 个音色已就绪")
+        ? ("全部 " + VOICES.length + " 个音色都已内置"
+          + (bundled >= VOICES.length ? "（用到哪个解哪个）" : ""))
         : ("已有 " + cnt + " / " + VOICES.length + " 个音色");
     }
   }
@@ -2062,17 +2577,21 @@ async function probe(){
       if (p?.model_path) S.engine.path = p.model_path;
     }catch(_){}
 
+    // 顶部状态条写的就是"现在到底在跑哪档"，别把 4B 显示成文件名切片。
+    const file = String(raw).split(/[\\/]/).pop();
     let short = "本地模型";
-    if (/4[._]7/i.test(raw)) short = "MiniCPM-V 4.7 1B";
-    else if (/4[._]6/i.test(raw)) short = "MiniCPM-V 4.6 1B";
-    else short = raw.split(/[\\/]/).pop().replace(/\.gguf$/i, "").slice(0, 26);
+    if (/minicpm/i.test(file) && /4[._]7/i.test(file)) short = "MiniCPM-V 4.7 1B";
+    else if (/minicpm/i.test(file) && /4[._]6/i.test(file)) short = "MiniCPM-V 4.6 1B";
+    else if (/qwen3?[._-]?vl.*4b/i.test(file)) short = "Qwen3-VL 4B";
+    else if (/qwen3?[._-]?vl.*2b/i.test(file)) short = "Qwen3-VL 2B";
+    else short = file.replace(/\.gguf$/i, "").slice(0, 26);
 
     S.engine.ok = true; S.engine.info = raw; S.engine.vision = vision; S.engine.build = build;
     dot.className = "dot on";
     txt.textContent = "本地引擎 · " + short + (vision ? " · 视觉已加载" : " · 仅文本");
     $("#engInfo").textContent = "llama.cpp " + build;
     $("#engPath").textContent = S.engine.path || raw;
-    const t1 = $("#tag1b");
+    const t1 = $("#mCardTag");
     if (t1){ t1.textContent = vision ? "已加载 · 视觉" : "已加载 · 仅文本"; t1.className = "tag " + (vision ? "on" : "warn"); }
     const rv = $("#rtVer"); if (rv) rv.textContent = build || "llama.cpp";
     $("#dotVision").textContent = vision ? "已加载" : "未加载";
@@ -2097,7 +2616,7 @@ async function probe(){
       ? `<b>引擎没连上。</b>到 设置 → 关于 → 「重启本地引擎」再试；还不行就重开 App。`
       : `<b>引擎没连上。</b>在 <code>D:/口袋CPM/testbed</code> 下双击 <code>start-server.bat</code>，再刷新本页。`;
     bn.classList.add("show");
-    const t1c = $("#tag1b");
+    const t1c = $("#mCardTag");
     if (t1c){ t1c.textContent = "未连接"; t1c.className = "tag off"; }
     return false;
   }
@@ -2140,6 +2659,16 @@ async function send(){
   }
   const img = S.attach ? S.attach.dataUrl : null;
   const msg = { role: "user", text: text || "（看图）", img, ts: Date.now() };
+  // 顺手嗅一下这句话里的自述信息（「我叫X」「我住X」…），挂成候选胶囊让用户决定。
+  // 群聊不做：一句「我叫X」是对着一群人说的，指代不清，宁可不记。
+  // 资料是全局的，所以拿 S.me 判重：已经记过的同类同值不再提示。
+  if (!g && !img){
+    const cand = detectFacts(text).filter(c => {
+      const cur = c.k === "you" ? S.me.name : S.me[c.k];
+      return String(cur || "").trim() !== c.value;
+    });
+    if (cand.length) msg.cand = cand;
+  }
   s.msgs.push(msg); s.at = Date.now();
   if (!s.title) s.title = (text || "图片问答").slice(0, 18);
   $("#input").value = ""; clearAttach(); syncSend();
@@ -2213,7 +2742,8 @@ async function replyOne(s, target, g, isLast){
   const payload = {
     model: CFG.model,
     messages: msgs,
-    stream: true,
+    // 跟随设置里的开关（默认 true）。关掉时下面走 r.json() 分支一次拿完整结果。
+    stream: !!S.opts.stream,
     temperature: S.opts.temp,
     max_tokens: S.opts.maxTok,
     top_p: 0.95,
@@ -2237,30 +2767,42 @@ async function replyOne(s, target, g, isLast){
       const t = await r.text();
       throw new Error(`HTTP ${r.status} ${t.slice(0, 300)}`);
     }
-    const reader = r.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    while (true){
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop();
-      for (const line of lines){
-        const L = line.trim();
-        if (!L.startsWith("data:")) continue;
-        const data = L.slice(5).trim();
-        if (data === "[DONE]") continue;
-        let j; try { j = JSON.parse(data); } catch { continue; }
-        const d = j.choices?.[0];
-        if (j.timings) stats.timings = j.timings;
-        const piece = d?.delta?.content ?? d?.text ?? "";
-        if (piece){
-          if (!tFirst){ tFirst = performance.now(); body.innerHTML = ""; }
-          acc += piece; chunks++;
-          body.innerHTML = md(acc);
-          bubble.classList.add("cursor");
-          scrollBottom();
+    if (!payload.stream){
+      // 非流式：服务端把整段回答一次性放进 message.content。
+      // 好处是 markdown 只渲染一次，代码块和表格不会边生成边跳；代价是首字延迟 = 整段耗时。
+      const j = await r.json();
+      const got = readNonStream(j);
+      if (got.timings) stats.timings = got.timings;
+      // 这里 tFirst 是"整段到手的时刻"，语义和流式的"首字时刻"不同，
+      // 交给下面的 whole 标记去换统计文案，别让界面写成「首字 8 秒」骗人
+      tFirst = performance.now();
+      if (got.text){ acc = got.text; body.innerHTML = md(acc); scrollBottom(); }
+    } else {
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true){
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop();
+        for (const line of lines){
+          const L = line.trim();
+          if (!L.startsWith("data:")) continue;
+          const data = L.slice(5).trim();
+          if (data === "[DONE]") continue;
+          let j; try { j = JSON.parse(data); } catch { continue; }
+          const d = j.choices?.[0];
+          if (j.timings) stats.timings = j.timings;
+          const piece = d?.delta?.content ?? d?.text ?? "";
+          if (piece){
+            if (!tFirst){ tFirst = performance.now(); body.innerHTML = ""; }
+            acc += piece; chunks++;
+            body.innerHTML = md(acc);
+            bubble.classList.add("cursor");
+            scrollBottom();
+          }
         }
       }
     }
@@ -2317,6 +2859,8 @@ async function replyOne(s, target, g, isLast){
       first: tFirst ? (tFirst - t0) / 1000 : 0,
       tok: tok,
       total: (tEnd - t0) / 1000,
+      // 非流式没有"首字"概念，first 记的是整段到手的耗时，界面要换文案
+      whole: !payload.stream,
     };
     acc = fixSelfName(acc, g ? target : s, g ? s : null);
     if (!acc){ body.innerHTML = md("_（没有输出）_"); }
@@ -2337,6 +2881,18 @@ async function replyOne(s, target, g, isLast){
     }
   }
   return !stopped;
+}
+
+/**
+ * 从非流式响应里取正文和 timings。
+ * 抽成独立函数有两个原因：一是 replyOne 已经很长，二是这段可以脱离 DOM 单测
+ * （见 testbed/stream-test.js）。字段路径与「回声重试」里那段 .json() 读取保持一致。
+ */
+function readNonStream(j){
+  return {
+    text: String(j?.choices?.[0]?.message?.content ?? ""),
+    timings: j?.timings || null,
+  };
 }
 
 function tokensFromTimings(st, ms){
@@ -2427,6 +2983,90 @@ function buildPresets(){
   });
 }
 /** 面板里的音色选择器。 */
+/**
+ * 生成一组资料格子。「我」页是唯一的调用方。
+ * prefix 是 input 的 id 前缀，避免和别处的输入框撞 id。
+ * onChange 在任一格子改动时触发，用来把值写回状态。
+ */
+function paintFactGrid(boxId, data, prefix, onChange){
+  const box = $(boxId);
+  if (!box) return;
+  box.innerHTML = "";
+  FACT_FIELDS.forEach(x => {
+    const cell = el("div", "fc");
+    const lab = el("label", null, x.label);
+    lab.htmlFor = prefix + x.k;   // 点标签能聚焦到对应输入框
+    cell.appendChild(lab);
+    const inp = document.createElement("input");
+    inp.id = prefix + x.k;
+    inp.maxLength = 20;
+    inp.placeholder = x.ph;
+    inp.value = String((data && data[x.k]) || "");
+    if (onChange) inp.oninput = onChange;
+    cell.appendChild(inp);
+    box.appendChild(cell);
+  });
+}
+
+/** 读回资料格子。只返回非空的，写回状态时要另外把清空的字段置空。 */
+function readFactGrid(prefix){
+  const out = {};
+  FACT_FIELDS.forEach(x => {
+    const inp = $("#" + prefix + x.k);
+    const v = inp ? inp.value.trim() : "";
+    if (v) out[x.k] = v;
+  });
+  return out;
+}
+
+/* ---------------- 「我」页（全局用户资料） ---------------- */
+/** 把 S.me 铺到表单上。 */
+function paintMe(){
+  const m = S.me || {};
+  const n = $("#meName"), b = $("#meBio");
+  if (n) n.value = m.name || "";
+  if (b) b.value = m.bio || "";
+  paintFactGrid("#meFacts", m, "m_", onMeInput);
+  paintMeAvatar();
+}
+
+/** 头像用名字首字画渐变圆；没填名字就显示「我」。 */
+function paintMeAvatar(){
+  const av = $("#meAvatar");
+  if (av) fillAvatar(av, { title: (S.me && S.me.name) || "我" }, 64);
+}
+
+/** 把表单读回 S.me。名字/签名单独取；格子按 FACT_FIELDS 全量覆盖，包括被清空的项。 */
+function readMeForm(){
+  S.me.name = (($("#meName") || {}).value || "").trim();
+  S.me.bio = (($("#meBio") || {}).value || "").trim();
+  const g = readFactGrid("m_");
+  FACT_FIELDS.forEach(x => { S.me[x.k] = g[x.k] || ""; });
+}
+
+/**
+ * 改动即存。400ms 防抖：save() 是整棵树序列化写 localStorage，
+ * 长会话下每敲一个字都写一遍会明显卡。
+ */
+let meSaveT = null;
+function onMeInput(){
+  readMeForm();
+  paintMeAvatar();
+  clearTimeout(meSaveT);
+  meSaveT = setTimeout(save, 400);
+}
+
+/** 长期记忆的剩余字数。超了当场标红，因为保存时超出部分会被截掉，别让它静默丢内容。 */
+function paintMemHint(){
+  const t = $("#csMemory"), h = $("#csMemHint");
+  if (!t || !h) return;
+  const left = MAX_MEMORY_CHARS - t.value.length;
+  h.textContent = left >= 0
+    ? "还能写 " + left + " 字"
+    : "超了 " + (-left) + " 字，保存时只留前 " + MAX_MEMORY_CHARS + " 字";
+  h.style.color = left < 0 ? "var(--err)" : "";
+}
+
 /** 联系人面板里的记忆条目列表。 */
 function renderCsNotes(c){
   const box = $("#csNotes");
@@ -2475,8 +3115,8 @@ function paintCsVoice(){
   if (hint){
     const miss = VOICES.filter(v => !voiceOk(v.k)).length;
     hint.textContent = miss
-      ? "音色只对这个联系人生效。灰色 " + miss + " 个要先导入音色包（设置 → 音色包）。"
-      : "音色只对这个联系人生效。";
+      ? "音色只对这个联系人生效。灰色 " + miss + " 个这版没有内置，需要导入音色包。"
+      : "音色只对这个联系人生效。切换时自动准备（首次约几秒）。";
   }
 }
 
@@ -2498,6 +3138,7 @@ function openContactSheet(s){
   $("#csName").value = s ? (s.title || "") : "";
   $("#csPersona").value = s ? (s.persona || "") : "";
   $("#csMemory").value = s ? (s.memory || "") : "";
+  paintMemHint();
   $("#csDelete").classList.toggle("show", !!s);
   renderCsNotes(s);
   csVoice = (s && s.voice) || S.opts.voice || "female";
@@ -2515,7 +3156,15 @@ function saveContact(){
   if (!name){ toast("先给它起个名字"); $("#csName").focus(); return; }
   if (nameTaken(name, csEditing)){ toast("已经有叫「" + name + "」的联系人了，换个名字"); $("#csName").focus(); return; }
   const persona = $("#csPersona").value.trim();
-  const memory = $("#csMemory").value.trim();
+  // 自由记忆加硬上限：以前这个框不封顶，写多长就往每次请求里塞多长，
+  // 8192 上下文里能悄悄吃掉四分之一。关键信息应该进上面的事实格。
+  let memory = $("#csMemory").value.trim();
+  if (memory.length > MAX_MEMORY_CHARS){
+    memory = memory.slice(0, MAX_MEMORY_CHARS);
+    toast("长期记忆超长，已保留前 " + MAX_MEMORY_CHARS + " 字；要点建议填到上面几栏");
+  }
+  // 用户资料已经搬到全局「我」页，这里不再有 facts；
+  // 老存档里残留的 session.facts 保持不动，load() 会把它迁移到 S.me
   if (csEditing){
     const s = S.sessions.find(x => x.id === csEditing);
     if (s){
@@ -2596,11 +3245,12 @@ function archiveStamp(){
 /** 存档内容：版本、设置、全部联系人与群聊（含聊天记录与图片）。 */
 function archivePayload(){
   return JSON.stringify({
-    app: "koudai-cpm",
+    app: "koudai-town",
     ver: (S.dev && S.dev.version) || "",
     at: Date.now(),
     opts: S.opts,
     sessions: S.sessions,
+    me: S.me,
   });
 }
 
@@ -2611,7 +3261,7 @@ function paintArchHint(){
   try { last = JSON.parse(localStorage.getItem(ARCH_KEY) || "null"); } catch (e) {}
   el.textContent = (last && last.name)
     ? ("上次：" + last.name + " · " + (last.when || ""))
-    : "存到 Download/口袋CPM，可整个文件夹拷走";
+    : "存到 Download/口袋小镇，可整个文件夹拷走";
 }
 
 /** 导出存档：分片送进原生，最后一次性写盘。 */
@@ -2638,7 +3288,7 @@ async function exportArchive(){
   const r = String(NATIVE.archiveFinish(name) || "");
   if (r.indexOf("ok:") === 0){
     const where = r.slice(3);
-    const shown = where.indexOf("/") >= 0 ? "Download/口袋CPM/" + name : where;
+    const shown = where.indexOf("/") >= 0 ? "Download/口袋小镇/" + name : where;
     try {
       localStorage.setItem(ARCH_KEY, JSON.stringify({ name, when: new Date().toLocaleString("zh-CN"), where: shown }));
     } catch (e) {}
@@ -2671,8 +3321,11 @@ window.onArchiveReady = async function(err){
 
   let d = null;
   try { d = JSON.parse(text); } catch (e) {}
-  if (!d || !Array.isArray(d.sessions)){ toast("这不是口袋 CPM 的存档", 3000); return; }
-  if (d.app && d.app !== "koudai-cpm"){ toast("存档格式不对", 3000); return; }
+  if (!d || !Array.isArray(d.sessions)){ toast("这不是口袋小镇的存档", 3000); return; }
+  // 老版本（改名前的 koudai-cpm）导出的存档照样认，别让手里有旧档的人打不开
+  if (d.app && d.app !== "koudai-town" && d.app !== "koudai-cpm"){
+    toast("存档格式不对", 3000); return;
+  }
 
   // 替换前先备份当前数据，万一选错文件还能退回去
   try { await exportArchive(); } catch (e) {}
@@ -2684,15 +3337,242 @@ window.onArchiveReady = async function(err){
     it.kind = it.kind || "single";
     it.msgs = it.msgs || [];
     it.at = it.at || Date.now();
+    // 老存档可能没有 facts / memory，补齐后再走后面那套读取逻辑
+    if (it.kind !== "group"){
+      it.memory = it.memory || "";
+      it.facts = (it.facts && typeof it.facts === "object") ? it.facts : {};
+    }
     if (!it.avatar) it.avatar = it.kind === "group" ? groupAvatar() : presets()[i % presets().length];
     if (it.kind === "group"){
       it.members = (it.members || []).filter(id => S.sessions.some(x => x.id === id && x !== it));
     }
   });
+  // 老存档没有 me 字段，这里会退化成从 session.facts 迁移
+  normalizeMe(d.me);
   S.cur = S.sessions[0] ? S.sessions[0].id : null;
   save(); refreshLists(); renderChat(); paintOpts(); paintHeader(); showScreen("home");
   toast("已恢复 " + contacts().length + " 个联系人、" + groups().length + " 个群", 3600);
 };
+
+/* ---------------- 读文档（.docx，只读正文） ----------------
+   原生那边负责解压 + 解析（DocxReader），这里只管切块、提问、拼结果。
+   为什么不把全文塞进一次请求：上下文只有 8192 tokens（约 3000 汉字），
+   一份十页的 Word 就超了，所以按段落切块，先出分段要点，再合成最终答复。 */
+const DOC_CHUNK = 900;        // 每块目标字数（约 1300 tokens，留足提示词与输出）
+const DOC_MAX_CHUNKS = 40;    // 再多就劝退：1B 上一块要几秒到十几秒
+const DOC_TRUNCATED_NOTE = "（超过 40 万字，只读了前面部分）";
+
+let docFile = null;           // {name, chars, paras, truncated, text}
+let docBusy = false;
+let docAbort = null;
+
+function openAddSheet(){ $("#addSheet").classList.add("show"); }
+function closeAddSheet(){ $("#addSheet").classList.remove("show"); }
+
+function openDocSheet(){
+  $("#docSheet").classList.add("show");
+  paintDocMeta();
+}
+function closeDocSheet(){
+  if (docBusy){ toast("还在处理，先点「停止」再关", 2200); return; }
+  $("#docSheet").classList.remove("show");
+}
+function paintDocMeta(){
+  const meta = $("#docMeta");
+  if (!docFile){
+    meta.textContent = "还没有选文件。选一个 .docx，只读正文，原文件不会改动。";
+    $("#docRun").disabled = true;
+    return;
+  }
+  meta.textContent = docFile.name + " · " + docFile.chars + " 字 / " + docFile.paras + " 段"
+    + (docFile.truncated ? DOC_TRUNCATED_NOTE : "");
+  $("#docRun").disabled = docBusy;
+}
+
+/** 入口：+ → 文档。选完文件由原生回调 window.onDocReady。 */
+function pickDocx(){
+  if (!HAS("pickDocx")){ toast("读文档只在 App 里可用", 2400); return; }
+  if (docBusy){ toast("还在处理文档，稍等", 2000); return; }
+  closeAddSheet();
+  NATIVE.pickDocx();
+}
+
+/** 原生解析完的回调（err=null 成功，"cancel" 表示取消）。 */
+window.onDocReady = function(err){
+  if (err === "cancel") return;
+  if (err){ toast(String(err), 4000); return; }
+  if (!HAS("docInfo") || !HAS("docChunk")){ toast("这个版本不支持读文档", 2400); return; }
+
+  let info = {};
+  try { info = JSON.parse(NATIVE.docInfo() || "{}"); } catch (e){}
+  const total = info.chars | 0;
+  // 和有存档一样分片取：几十万字一次性跨 WebView 桥会明显卡一下
+  let text = "";
+  const step = 100000;
+  for (let i = 0; i < total; i += step) text += NATIVE.docChunk(i, Math.min(step, total - i));
+  // 正文已经到 JS 这边了，原生那份可以放掉：一份 40 万字的文档在两边各存一份没必要
+  if (HAS("docClear")) NATIVE.docClear();
+
+  docFile = {
+    name: info.name || "文档",
+    chars: total,
+    paras: info.paras | 0,
+    truncated: !!info.truncated,
+    text,
+  };
+  $("#docOut").innerHTML = "";
+  openDocSheet();
+  if (!total){ toast("这份文档没有可读的正文（可能是扫描件或空的）", 3600); return; }
+  toast("读到 " + total + " 字，说说想让我做什么", 3000);
+};
+
+/** 按段落切块，单段过长再硬切，避免最后一块撑爆上下文。 */
+function splitDoc(text, max){
+  const paras = String(text || "").split(/\n+/).map(s => s.trim()).filter(Boolean);
+  const out = [];
+  let cur = "";
+  const flush = () => { if (cur){ out.push(cur); cur = ""; } };
+  for (const p of paras){
+    if (p.length > max){
+      flush();
+      for (let i = 0; i < p.length; i += max) out.push(p.slice(i, i + max));
+      continue;
+    }
+    if (cur && cur.length + 1 + p.length > max) flush();
+    cur = cur ? cur + "\n" + p : p;
+  }
+  flush();
+  return out;
+}
+
+/** 文档流程固定走非流式：一块一块地算，中间过程用进度行代替逐字。 */
+async function docCall(sys, user, maxTok, signal){
+  const r = await fetch(CFG.base + "/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal,
+    body: JSON.stringify({
+      model: CFG.model,
+      messages: [{ role: "system", content: sys }, { role: "user", content: user }],
+      stream: false,
+      temperature: 0.3,
+      max_tokens: maxTok,
+      top_p: 0.9,
+      chat_template_kwargs: { enable_thinking: false },
+    }),
+  });
+  if (!r.ok){
+    const t = await r.text();
+    throw new Error("HTTP " + r.status + " " + t.slice(0, 200));
+  }
+  return readNonStream(await r.json()).text.trim();
+}
+
+function onDocRun(){
+  if (docBusy){
+    if (docAbort) docAbort.abort();
+    return;
+  }
+  runDoc();
+}
+
+async function runDoc(){
+  if (docBusy || !docFile) return;
+  if (!docFile.text){ toast("这份文档没有可读的正文", 2600); return; }
+
+  const task = ($("#docTask").value || "").trim() || "总结成 5 条要点";
+  const chunks = splitDoc(docFile.text, DOC_CHUNK);
+  if (!chunks.length){ toast("这份文档没有可读的正文", 2600); return; }
+  if (chunks.length > DOC_MAX_CHUNKS){
+    toast("文档太长（" + chunks.length + " 块 > " + DOC_MAX_CHUNKS + "），请先拆成小文件", 4200);
+    return;
+  }
+
+  const alive = await probe();
+  if (!alive){ toast("本地引擎没起来，去模型页看看", 3000); return; }
+
+  docBusy = true;
+  S.busy = true; syncSend();
+  const ac = new AbortController();
+  docAbort = ac;
+  S.abort = ac;
+  const out = $("#docOut");
+  const runBtn = $("#docRun");
+  runBtn.textContent = "停止";
+  runBtn.disabled = false;
+  $("#docPick").disabled = true;
+  const prog = t => { out.innerHTML = md("_（" + t + "）_"); };
+
+  try{
+    const sys = "你是文档助手。只依据用户给的文档内容回答，不要编造文档里没有的信息；"
+      + "数字、金额、日期要原样引用。用中文回答，简洁，不要寒暄。";
+    let finalText = "";
+
+    if (chunks.length === 1){
+      prog("读整份文档…");
+      finalText = await docCall(sys, "任务：" + task + "\n\n【文档正文】\n" + chunks[0], 700, ac.signal);
+    } else {
+      const notes = [];
+      for (let i = 0; i < chunks.length; i++){
+        if (ac.signal.aborted) throw new Error("aborted");
+        prog("第 " + (i + 1) + "/" + chunks.length + " 块…（逐块读，慢）");
+        const n = await docCall(sys,
+          "这是同一份文档的第 " + (i + 1) + "/" + chunks.length + " 段。"
+          + "请用不超过 120 字抄下与本任务相关的原文要点，数字、金额、时间原样保留；"
+          + "本段无关就只输出「无关」。"
+          + "\n任务：" + task + "\n\n【本段正文】\n" + chunks[i],
+          260, ac.signal);
+        // 1B 会无视"只输出一行"，写成 5 条清单——那就整段收下，别只取第一行（会丢数字）。
+        // 只把结尾那句"无关"切掉，用来判断本段到底有没有内容。
+        const note = String(n).replace(/\s+/g, " ").replace(/\s*无关[。.]?\s*$/, "").trim();
+        if (note && !/^无关/.test(note)) {
+          notes.push("第 " + (i + 1) + " 段：" + note.slice(0, 260));
+        }
+      }
+      if (!notes.length){
+        finalText = "这份文档里没找到和「" + task + "」相关的内容。";
+      } else {
+        prog("整理最终结果…");
+        finalText = await docCall(sys,
+          "任务：" + task + "\n\n下面是同一份文档各段的摘录（按顺序）：\n"
+          + notes.join("\n").slice(0, 6000)
+          + "\n\n请据此完成任务。直接给结果，不要提「摘录」「分段」，不要编造没出现的数字。",
+          800, ac.signal);
+      }
+    }
+
+    out.innerHTML = md(finalText || "_（模型没有返回内容）_");
+    if (finalText){
+      const bar = el("div", "row2");
+      const cp = el("button", "", "复制结果");
+      cp.onclick = () => {
+        if (HAS("copy")) NATIVE.copy(finalText);
+        else if (navigator.clipboard) navigator.clipboard.writeText(finalText);
+        toast("已复制");
+      };
+      bar.appendChild(cp);
+      bar.style.marginTop = "10px";
+      out.appendChild(bar);
+    }
+  }catch(e){
+    const msg = String((e && e.message) || e);
+    if (msg === "aborted" || (e && e.name === "AbortError")){
+      out.innerHTML = md("_（已停止）_");
+    } else {
+      out.innerHTML = md("**出错了：** `" + msg.replace(/`/g, "'") + "`");
+      toast("处理失败：" + msg.slice(0, 50), 3000);
+    }
+  }finally{
+    docBusy = false;
+    docAbort = null;
+    S.abort = null;
+    S.busy = false;
+    syncSend();
+    runBtn.textContent = "开始";
+    runBtn.disabled = false;
+    $("#docPick").disabled = false;
+  }
+}
 
 /* ---------------- 通用确认框 ---------------- */
 let cfAction = null;
@@ -2896,6 +3776,7 @@ function deleteGroup(){
 /* ---------------- 设置绑定 ---------------- */
 function paintOpts(){
   $("#swThink").setAttribute("aria-checked", S.opts.think);
+  $("#swStream").setAttribute("aria-checked", !!S.opts.stream);
   $("#rgTemp").value = S.opts.temp;
   $("#rgMax").value = S.opts.maxTok;
   if (S.opts.imgEdge > 1280) S.opts.imgEdge = 1280;
@@ -3086,6 +3967,12 @@ function boot(){
   $("#csCancel").onclick = closeContactSheet;
   $("#csVeil").onclick = closeContactSheet;
   $("#csSave").onclick = saveContact;
+  // 长期记忆有硬上限，边打字边显示还差多少，别等点保存才被截断
+  $("#csMemory").oninput = paintMemHint;
+  // 「我」页：名字/签名改一个字就即时落库（内部有 400ms 防抖）
+  const mn = $("#meName"), mb = $("#meBio");
+  if (mn) mn.oninput = onMeInput;
+  if (mb) mb.oninput = onMeInput;
   $("#csImport").onclick = () => $("#avatarInput").click();
   $("#csRead").onclick = () => {
     csRead = !csRead;
@@ -3118,15 +4005,32 @@ function boot(){
   });
   $("#sendBtn").onclick = send;
 
-  // 图片
-  $("#plusBtn").onclick = () => {
+  // 添加：照片 / 文档
+  $("#plusBtn").onclick = openAddSheet;
+  $("#asVeil").onclick = closeAddSheet;
+  $("#asCancel").onclick = closeAddSheet;
+  $("#asImage").onclick = () => {
+    closeAddSheet();
+    // Qwen3-VL 档的视觉塔在当前原生库里会崩（clip_encode → ggml_gallocr，真机 tombstone 已确认），
+    // 与其让用户点了图之后引擎整个挂掉，不如直接拦住并说清楚
+    const qwen = S.dev && (S.dev.model === "2b" || S.dev.model === "4b");
+    if (qwen){
+      toast("这个模型这版只能文字\n看图请切回 1B（模型页可切）", 3200);
+      return;
+    }
     if (S.engine.ok && !S.engine.vision){
       toast("当前引擎没加载视觉模块，传图会失败\n模型页有说明", 2800);
       return;
     }
     $("#fileInput").click();
   };
+  $("#asDoc").onclick = pickDocx;
+  $("#docPick").onclick = pickDocx;
+  $("#docRun").onclick = onDocRun;
+  $("#docClose").onclick = closeDocSheet;
+  $("#dcVeil").onclick = closeDocSheet;
   $("#fileInput").onchange = e => { handleFile(e.target.files[0]); e.target.value = ""; };
+  // 模型档的切换入口在模型页列表里（paintModelPage 渲染时绑），这里不再单独绑
   $("#attachClear").onclick = clearAttach;
   document.addEventListener("paste", e => {
     const f = [...(e.clipboardData?.files || [])][0];
@@ -3147,6 +4051,7 @@ function boot(){
 
   // 设置
   bindSwitch("#swThink", "think");
+  bindSwitch("#swStream", "stream");
   bindSwitch("#swDark", "dark");
   bindSwitch("#swStat", "showStat");
   bindSwitch("#swTts", "tts");
@@ -3174,21 +4079,9 @@ function boot(){
     if (!HAS("importModels")){ toast("导入模型包只在 App 里可用", 2000); return; }
     NATIVE.importModels();
   };
-  $("#btnImportVoices").onclick = () => {
-    if (!HAS("importModels")){ toast("导入音色包只在 App 里可用", 2000); return; }
-    NATIVE.importModels();
-  };
-  $$("#modelSeg button").forEach(b => {
-    b.onclick = () => {
-      const id = b.dataset.model;
-      if (S.dev && S.dev.model === id) return;
-      if (!HAS("setModel")){ toast("切换模型只在 App 里可用", 2000); return; }
-      const ok = NATIVE.setModel(id);
-      if (!ok){ toast(id === "35b" ? "35B 模型还没导入" : "1B 模型没找到", 2400); return; }
-      toast(id === "35b" ? "已切到 35B，正在加载（首次要几分钟）" : "已切回 1B，正在重启引擎", 3200);
-      [2000, 8000, 20000, 45000, 90000, 150000].forEach(ms => setTimeout(probe, ms));
-    };
-  });
+  // 音色已随安装包内置，这个入口只在老版本页面里存在，取不到就跳过
+  const vimp = $("#btnImportVoices");
+  if (vimp) vimp.onclick = () => NATIVE.importModels && NATIVE.importModels();
   $("#btnExport").onclick = () => {    const s = curSession();
     if (!s || !s.msgs.length){ toast("这个会话还没有内容"); return; }
     const txt = s.msgs.map(m => (m.role === "user" ? "我：" : (s.title || "对方") + "：") + (m.text || "")).join("\n\n");

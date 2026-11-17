@@ -1,4 +1,4 @@
-package com.koudai.cpm;
+package com.koudai.town;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -30,9 +30,9 @@ public class EngineService extends Service {
     private static final String CHANNEL = "koudai_engine";
     private static final int NOTIFY_ID = 1001;
 
-    static final String ACTION_STOP = "com.koudai.cpm.action.STOP";
-    static final String ACTION_ARM_IDLE = "com.koudai.cpm.action.ARM_IDLE";
-    static final String ACTION_DISARM_IDLE = "com.koudai.cpm.action.DISARM_IDLE";
+    static final String ACTION_STOP = "com.koudai.town.action.STOP";
+    static final String ACTION_ARM_IDLE = "com.koudai.town.action.ARM_IDLE";
+    static final String ACTION_DISARM_IDLE = "com.koudai.town.action.DISARM_IDLE";
 
     /** 后台闲置多久自动释放内存。 */
     private static final long IDLE_MS = 60 * 60 * 1000L;
@@ -134,7 +134,7 @@ public class EngineService extends Service {
         PendingIntent stop = PendingIntent.getService(this, 2,
                 new Intent(this, EngineService.class).setAction(ACTION_STOP), flags);
 
-        b.setContentTitle("口袋CPM 正在本机运行")
+        b.setContentTitle("口袋小镇 正在本机运行")
                 .setContentText("离线引擎已就绪，随时可以提问")
                 .setSmallIcon(R.drawable.ic_notify)
                 .setContentIntent(open)

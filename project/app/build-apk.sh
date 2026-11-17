@@ -1,5 +1,5 @@
 #!/bin/bash
-# 口袋CPM 测试版 APK 构建脚本（不用 Gradle，手工走 aapt2/javac/d8/apksigner）
+# 口袋小镇（PocketTown）测试版 APK 构建脚本（不用 Gradle，手工走 aapt2/javac/d8/apksigner）
 set -e
 
 # 工程实际位置：D:\口袋CPM\project（工作区内）。
@@ -25,7 +25,7 @@ JAVAC=$JDK/bin/javac.exe
 KEYTOOL=$JDK/bin/keytool.exe
 OUT=$ROOT/out
 TARGET_SDK=${TARGET_SDK:-34}
-OUT_NAME=${OUT_NAME:-koudai-cpm-0.1-test.apk}
+OUT_NAME=${OUT_NAME:-PocketTown-0.1-test.apk}
 
 export JAVA_HOME=$JDK
 export PATH="$JDK/bin:$PATH"
