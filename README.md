@@ -121,6 +121,13 @@ New-Item -ItemType Junction -Path 'D:\kcpm' -Target 'D:\口袋CPM\project'
 
 - 下载页：<https://github.com/wtbysq/PocketTown/releases>
 - 1.2.0：`PocketTown-1.2.0.apk`（830 MB）· 模型包三份：`PocketTown-MiniCPM-V-4.7-1B-2.1.0.zip`（1.4 GB）、`PocketTown-Qwen3-VL-2B-2.1.0.zip`（1.6 GB）、`PocketTown-Qwen3-VL-4B-2.1.0.zip`（2.9 GB）
+- GitHub Release 单资产上限 2 GB，4B 包在下载页拆成 `.zip.001` / `.zip.002` 两段，下载后合并再用：
+
+  ```bat
+  copy /b PocketTown-Qwen3-VL-4B-2.1.0.zip.001+PocketTown-Qwen3-VL-4B-2.1.0.zip.002 PocketTown-Qwen3-VL-4B-2.1.0.zip
+  ```
+
+  合并后应为 3,095,680,357 字节。1B / 2B 不受限制，直接下载即可。
 - 1.1.0（旧名）：`koudai-cpm-1.1.0-lite.apk` + `koudai-models-1.0.0.zip` + `koudai-voices-1.0.0.zip`，仍在同一个 Release 页
 
 ## 技术要点
